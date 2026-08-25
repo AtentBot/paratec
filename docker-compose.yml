@@ -1,0 +1,87 @@
+# Stack de atendimento Paratec: WhatsApp (Evolution) -> N8N -> Agentes (LangGraph)
+# Variáveis sensíveis vêm de .env.docker (ver .env.docker.example). NÃO commitar.
+#
+# Subir:  docker compose --env-file .env.docker up -d --build
+# Ver:    docker compose ps  |  docker compose logs -f agent-service
+
+services:
+  # Postgres local com pgvector (Evolution + N8N + base RAG de dev).
+  # O catálogo de produção fica no Postgres remoto (pg.atentbot.com).
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LOCAL_PG_USER:-paratec}
+      POSTGRES_PASSWORD: ${LOCAL_PG_PASSWORD:?defina em .env.docker}
+      POSTGRES_DB: ${LOCAL_PG_DB:-paratec_stack}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"   # exposto em 5433 para não colidir com Postgres local
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+
+  # WhatsApp via Evolution API (self-hosted, não-oficial).
+  evolution-api:
+    image: atendai/evolution-api:v2.1.1
+    restart: unless-stopped
+    depends_on: [postgres, redis]
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina em .env.docker}
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${LOCAL_PG_USER:-paratec}:${LOCAL_PG_PASSWORD}@postgres:5432/${LOCAL_PG_DB:-paratec_stack}
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_LOCAL_ENABLED: "false"
+    ports:
+      - "8080:8080"
+    volumes:
+      - evolution_instances:/evolution/instances
+
+  # Orquestração de fluxo (recebe webhook do WhatsApp, chama o agente).
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    depends_on: [postgres]
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: ${LOCAL_PG_DB:-paratec_stack}
+      DB_POSTGRESDB_USER: ${LOCAL_PG_USER:-paratec}
+      DB_POSTGRESDB_PASSWORD: ${LOCAL_PG_PASSWORD}
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: "5678"
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: America/Sao_Paulo
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8ndata:/home/node/.n8n
+
+  # Malha de agentes (LangGraph + FastAPI). Consulta o catálogo no Postgres.
+  agent-service:
+    build: ./agent-service
+    restart: unless-stopped
+    environment:
+      # Catálogo: por padrão aponta para o Postgres remoto de produção.
+      PGHOST: ${PGHOST:?defina em .env.docker}
+      PGPORT: ${PGPORT:-5432}
+      PGDATABASE: ${PGDATABASE:-paratec}
+      PGUSER: ${PGUSER:-postgres}
+      PGPASSWORD: ${PGPASSWORD:?defina em .env.docker}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?defina em .env.docker}
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
+  redisdata:
+  evolution_instances:
+  n8ndata:

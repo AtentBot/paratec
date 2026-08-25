@@ -1,0 +1,77 @@
+{
+  "name": "Paratec — WhatsApp Atendimento",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "paratec-whatsapp",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-evolution",
+      "name": "Webhook (Evolution)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "webhookId": "paratec-whatsapp"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrai a mensagem recebida do payload da Evolution API (evento MESSAGES_UPSERT)\nconst b = $input.first().json.body ?? $input.first().json;\nconst data = b.data ?? {};\nconst key = data.key ?? {};\n\n// Ignora mensagens enviadas por nós mesmos\nif (key.fromMe) { return []; }\n\nconst msg = data.message ?? {};\nconst text = msg.conversation ?? (msg.extendedTextMessage && msg.extendedTextMessage.text) ?? '';\nif (!text) { return []; } // ignora áudio/imagem/etc. nesta versão\n\nconst number = String(key.remoteJid ?? '').split('@')[0];\nconst instance = b.instance ?? b.instanceName ?? '';\n\nreturn [{ json: { mensagem: text, number, instance, thread_id: number } }];"
+      },
+      "id": "extrair-mensagem",
+      "name": "Extrair mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://agent-service:8000/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"mensagem\": {{ JSON.stringify($json.mensagem) }},\n  \"thread_id\": {{ JSON.stringify($json.thread_id) }}\n}",
+        "options": {}
+      },
+      "id": "chamar-agente",
+      "name": "Chamar agente (/chat)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://evolution-api:8080/message/sendText/{{ $('Extrair mensagem').item.json.instance }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "REPLACE_WITH_EVOLUTION_API_KEY" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": {{ JSON.stringify($('Extrair mensagem').item.json.number) }},\n  \"text\": {{ JSON.stringify($json.resposta) }}\n}",
+        "options": {}
+      },
+      "id": "responder-whatsapp",
+      "name": "Responder (sendText)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Webhook (Evolution)": {
+      "main": [[{ "node": "Extrair mensagem", "type": "main", "index": 0 }]]
+    },
+    "Extrair mensagem": {
+      "main": [[{ "node": "Chamar agente (/chat)", "type": "main", "index": 0 }]]
+    },
+    "Chamar agente (/chat)": {
+      "main": [[{ "node": "Responder (sendText)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

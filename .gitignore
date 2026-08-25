@@ -1,0 +1,43 @@
+# Segredos e credenciais — NUNCA commitar
+projeto.txt
+.env
+.env.*
+*.env
+.env.docker
+secrets/
+*.pem
+*.key
+# ...mas mantém os arquivos de exemplo versionados
+!.env.example
+!.env.docker.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Dados / scraping
+data/*.json
+data/*.csv
+data/raw/
+*.sqlite
+*.db
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker / logs
+*.log
