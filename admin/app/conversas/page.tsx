@@ -39,6 +39,9 @@ export default function ConversasPage() {
   const [filtro, setFiltro] = useState<"todas" | ConversaStatus>("todas");
   const [offline, setOffline] = useState(false);
   const [carregando, setCarregando] = useState(true);
+  const [texto, setTexto] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erroEnvio, setErroEnvio] = useState<string | null>(null);
 
   const carregarLista = useCallback(async () => {
     try {
@@ -82,9 +85,32 @@ export default function ConversasPage() {
     }
   }
 
+  async function enviar() {
+    const t = texto.trim();
+    if (!t || !ativa || enviando) return;
+    setEnviando(true);
+    setErroEnvio(null);
+    try {
+      setAtiva(await api.responderConversa(ativa.thread_id, t));
+      setTexto("");
+      carregarLista();
+    } catch {
+      setErroEnvio(
+        "Não foi possível enviar. Verifique se a Evolution API está configurada.",
+      );
+    } finally {
+      setEnviando(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4 animate-fade-in">
       {offline && <OfflineNotice base={api.base} />}
+      {erroEnvio && (
+        <div className="rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
+          {erroEnvio}
+        </div>
+      )}
 
       <div className="grid h-[calc(100dvh-200px)] grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
         {/* Lista */}
@@ -248,13 +274,22 @@ export default function ConversasPage() {
                 )}
                 <div className="relative flex-1">
                   <input
-                    placeholder="Responder (envio manual em breve)…"
-                    disabled
-                    className="w-full rounded-lg border bg-surface py-2 pl-3 pr-10 text-sm text-ink outline-none placeholder:text-faint disabled:opacity-60"
+                    value={texto}
+                    onChange={(e) => setTexto(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        enviar();
+                      }
+                    }}
+                    placeholder="Responder ao cliente pelo WhatsApp…"
+                    disabled={enviando}
+                    className="w-full rounded-lg border bg-surface py-2 pl-3 pr-10 text-sm text-ink outline-none placeholder:text-faint focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
                   />
                   <button
-                    disabled
-                    className="absolute right-1.5 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md bg-accent text-accent-ink opacity-60"
+                    onClick={enviar}
+                    disabled={enviando || !texto.trim()}
+                    className="absolute right-1.5 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md bg-accent text-accent-ink transition hover:opacity-90 disabled:opacity-50"
                   >
                     <Send size={14} />
                   </button>

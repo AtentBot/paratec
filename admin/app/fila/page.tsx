@@ -8,6 +8,7 @@ import { relativo } from "@/lib/format";
 import type { FilaItem, FilaStatus, FilaTipo } from "@/lib/types";
 import {
   Check,
+  Download,
   FileText,
   Inbox,
   Phone,
@@ -91,11 +92,19 @@ export default function FilaPage() {
             </button>
           ))}
         </div>
-        {itens.length > 0 && (
-          <Badge tone="danger" dot>
-            {abertos} aguardando atendimento
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {itens.length > 0 && (
+            <Badge tone="danger" dot>
+              {abertos} aguardando atendimento
+            </Badge>
+          )}
+          <a
+            href={api.filaCsvUrl(tipo === "todos" ? {} : { tipo })}
+            className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-muted transition hover:bg-surface-2 hover:text-ink"
+          >
+            <Download size={13} /> Exportar CSV
+          </a>
+        </div>
       </div>
 
       {carregando ? (

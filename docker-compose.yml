@@ -81,6 +81,11 @@ services:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:?defina em .env.docker}
       LLM_MODEL: ${LLM_MODEL:-gemini-flash-latest}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      # Envio de WhatsApp de saída pelo painel (resposta humana).
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-http://evolution-api:8080}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-paratec}
+    depends_on: [evolution-api]
     ports:
       - "8000:8000"
 

@@ -64,6 +64,20 @@ export const api = {
     get<ConversaDetalhe>(`/conversas/${encodeURIComponent(threadId)}`),
   assumirConversa: (threadId: string) =>
     send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/assumir`),
+  responderConversa: (threadId: string, texto: string) =>
+    send<ConversaDetalhe>(
+      "POST",
+      `/conversas/${encodeURIComponent(threadId)}/responder`,
+      { texto },
+    ),
+
+  // URLs de exportação (download direto pelo navegador)
+  clientesCsvUrl: (status?: string) =>
+    `${BASE}/clientes.csv${status ? `?status=${status}` : ""}`,
+  filaCsvUrl: (params: { tipo?: string; status?: string } = {}) => {
+    const qs = new URLSearchParams(params as Record<string, string>).toString();
+    return `${BASE}/fila.csv${qs ? `?${qs}` : ""}`;
+  },
 
   // Fila humana
   fila: (params: { tipo?: string; status?: string } = {}) => {

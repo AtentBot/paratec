@@ -2,7 +2,7 @@
 `store`, validando apenas roteamento, parâmetros e serialização."""
 from fastapi.testclient import TestClient
 
-from app import main, store
+from app import evolution, main, store
 
 client = TestClient(main.app)
 
@@ -50,3 +50,40 @@ def test_assumir_conversa(monkeypatch):
     r = client.post("/conversas/5511/assumir")
     assert r.status_code == 200
     assert r.json()["status"] == "humano"
+
+
+def test_responder_envia_e_persiste(monkeypatch):
+    enviados = {}
+    monkeypatch.setattr(store, "get_conversation", lambda tid: {"thread_id": tid, "mensagens": []})
+    monkeypatch.setattr(store, "add_message", lambda *a, **k: enviados.setdefault("msg", a))
+    monkeypatch.setattr(store, "set_status", lambda *a, **k: None)
+    monkeypatch.setattr(evolution, "enviar_texto", lambda tel, txt: enviados.update(tel=tel, txt=txt) or {})
+    r = client.post("/conversas/5511/responder", json={"texto": "Olá!"})
+    assert r.status_code == 200
+    assert enviados["tel"] == "5511" and enviados["txt"] == "Olá!"
+
+
+def test_responder_503_quando_evolution_off(monkeypatch):
+    monkeypatch.setattr(store, "get_conversation", lambda tid: {"thread_id": tid, "mensagens": []})
+
+    def boom(tel, txt):
+        raise evolution.EvolutionError("não configurada")
+
+    monkeypatch.setattr(evolution, "enviar_texto", boom)
+    r = client.post("/conversas/5511/responder", json={"texto": "oi"})
+    assert r.status_code == 503
+
+
+def test_clientes_csv(monkeypatch):
+    monkeypatch.setattr(
+        store, "list_customers",
+        lambda status=None, limit=100000: [
+            {"telefone": "5511", "razao_social": "ACME", "cnpj": "1", "email": "a@a",
+             "nome_contato": "Ana", "status": "ativo", "created_at": "2026-08-29"},
+        ],
+    )
+    r = client.get("/clientes.csv")
+    assert r.status_code == 200
+    assert "text/csv" in r.headers["content-type"]
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert "razao_social" in r.text and "ACME" in r.text

@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     # Origens liberadas p/ CORS (tela adm). CSV no env CORS_ORIGINS.
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
+    # Evolution API (envio de WhatsApp de saída pelo painel). Vazio = desabilitado.
+    evolution_api_url: str = ""       # ex: http://evolution-api:8080
+    evolution_api_key: str = ""
+    evolution_instance: str = "paratec"
+
+    @property
+    def evolution_configured(self) -> bool:
+        return bool(self.evolution_api_url and self.evolution_api_key)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

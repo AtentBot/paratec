@@ -1,13 +1,15 @@
 """API HTTP do serviço de agentes — chamada pelo N8N (fluxo do WhatsApp)
 e pela tela administrativa (endpoints /catalog, /conversas, /fila, /metrics)."""
+import csv
+import io
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import catalog, store
+from . import catalog, evolution, store
 from .agents import responder
 from .db import get_pool
 from .settings import settings
@@ -52,6 +54,10 @@ class QueueUpdate(BaseModel):
     responsavel: str | None = None
 
 
+class ResponderRequest(BaseModel):
+    texto: str
+
+
 @app.get("/health")
 def health():
     try:
@@ -93,6 +99,24 @@ def assumir(thread_id: str):
     return c
 
 
+@app.post("/conversas/{thread_id}/responder")
+def responder_conversa(thread_id: str, req: ResponderRequest):
+    """Envia uma resposta HUMANA ao cliente pelo WhatsApp (Evolution) e registra
+    no histórico. thread_id = número do WhatsApp."""
+    texto = req.texto.strip()
+    if not texto:
+        raise HTTPException(status_code=422, detail="texto vazio")
+    if store.get_conversation(thread_id) is None:
+        raise HTTPException(status_code=404, detail="conversa não encontrada")
+    try:
+        evolution.enviar_texto(thread_id, texto)
+    except evolution.EvolutionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    store.add_message(thread_id, "humano", texto)
+    store.set_status(thread_id, "humano")
+    return store.get_conversation(thread_id)
+
+
 # --- Clientes (tela adm) ---------------------------------------------------
 
 @app.get("/clientes")
@@ -128,6 +152,35 @@ def fila_update(item_id: int, upd: QueueUpdate):
 @app.get("/metrics/overview")
 def metrics_overview():
     return store.metrics_overview()
+
+
+# --- Exportações CSV -------------------------------------------------------
+
+def _csv(filename: str, colunas: list[str], linhas: list[dict]) -> Response:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(colunas)
+    for r in linhas:
+        w.writerow([r.get(c, "") for c in colunas])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/clientes.csv")
+def clientes_csv(status: str | None = None):
+    cols = ["telefone", "razao_social", "cnpj", "email", "nome_contato",
+            "status", "created_at"]
+    return _csv("clientes.csv", cols, store.list_customers(status, 100000))
+
+
+@app.get("/fila.csv")
+def fila_csv(tipo: str | None = None, status: str | None = None):
+    cols = ["id", "tipo", "status", "cliente", "telefone", "resumo",
+            "responsavel", "created_at"]
+    return _csv("fila.csv", cols, store.list_queue(tipo, status))
 
 
 # --- Catálogo (consumido pela tela administrativa) -------------------------

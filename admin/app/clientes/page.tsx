@@ -9,6 +9,7 @@ import type { Cliente, ClienteStatus } from "@/lib/types";
 import {
   AtSign,
   Building2,
+  Download,
   Phone,
   User,
   Users,
@@ -67,11 +68,19 @@ export default function ClientesPage() {
             </button>
           ))}
         </div>
-        {lista.length > 0 && (
-          <Badge tone="success" dot>
-            {ativos} {ativos === 1 ? "cliente ativo" : "clientes ativos"}
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {lista.length > 0 && (
+            <Badge tone="success" dot>
+              {ativos} {ativos === 1 ? "cliente ativo" : "clientes ativos"}
+            </Badge>
+          )}
+          <a
+            href={api.clientesCsvUrl(filtro === "todos" ? undefined : filtro)}
+            className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-muted transition hover:bg-surface-2 hover:text-ink"
+          >
+            <Download size={13} /> Exportar CSV
+          </a>
+        </div>
       </div>
 
       {carregando ? (
