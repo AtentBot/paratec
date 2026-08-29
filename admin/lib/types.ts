@@ -34,6 +34,21 @@ export interface CatalogStats {
   categorias: number;
 }
 
+// --- Clientes -------------------------------------------------------------
+
+export type ClienteStatus = "pendente" | "ativo";
+
+export interface Cliente {
+  telefone: string;
+  razao_social: string | null;
+  cnpj: string | null;
+  email: string | null;
+  nome_contato: string | null;
+  status: ClienteStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 // --- Conversas ------------------------------------------------------------
 
 export type MsgRole = "cliente" | "agente" | "humano";

@@ -6,6 +6,7 @@ import {
   MessagesSquare,
   Package,
   Headset,
+  Users,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -21,6 +22,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/conversas", label: "Conversas", icon: MessagesSquare },
+  { href: "/clientes", label: "Clientes", icon: Users },
   { href: "/catalogo", label: "Catálogo", icon: Package },
   { href: "/fila", label: "Fila humana", icon: Headset },
 ];

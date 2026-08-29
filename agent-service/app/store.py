@@ -34,6 +34,71 @@ def ensure_schema() -> None:
     execute_script(_schema_path().read_text(encoding="utf-8"))
 
 
+# --- Clientes (cadastro) --------------------------------------------------
+
+# Campos obrigatórios p/ o cadastro ser considerado 'ativo'.
+CAMPOS_CADASTRO = ("razao_social", "cnpj", "email", "nome_contato")
+
+
+def get_customer(telefone: str) -> dict | None:
+    rows = query(
+        """SELECT telefone, razao_social, cnpj, email, nome_contato,
+                  status, created_at, updated_at
+             FROM customers WHERE telefone = %s""",
+        (telefone,),
+    )
+    return rows[0] if rows else None
+
+
+def cliente_ativo(telefone: str) -> bool:
+    c = get_customer(telefone)
+    return bool(c and c["status"] == "ativo")
+
+
+def upsert_customer(telefone: str, **campos) -> dict:
+    """Cria/atualiza o cliente com os campos informados (parciais) e recalcula
+    o status: 'ativo' quando os 4 campos obrigatórios estão preenchidos."""
+    dados = {k: campos.get(k) for k in CAMPOS_CADASTRO}
+    execute(
+        """
+        INSERT INTO customers (telefone, razao_social, cnpj, email, nome_contato)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (telefone) DO UPDATE SET
+            razao_social = COALESCE(EXCLUDED.razao_social, customers.razao_social),
+            cnpj         = COALESCE(EXCLUDED.cnpj,         customers.cnpj),
+            email        = COALESCE(EXCLUDED.email,        customers.email),
+            nome_contato = COALESCE(EXCLUDED.nome_contato, customers.nome_contato),
+            updated_at   = now()
+        """,
+        (telefone, dados["razao_social"], dados["cnpj"], dados["email"], dados["nome_contato"]),
+    )
+    # Recalcula status a partir do estado consolidado.
+    execute(
+        """
+        UPDATE customers SET status = CASE
+            WHEN razao_social IS NOT NULL AND cnpj IS NOT NULL
+             AND email IS NOT NULL AND nome_contato IS NOT NULL
+            THEN 'ativo' ELSE 'pendente' END,
+            updated_at = now()
+         WHERE telefone = %s
+        """,
+        (telefone,),
+    )
+    return get_customer(telefone)  # type: ignore[return-value]
+
+
+def list_customers(status: str | None = None, limit: int = 200) -> list[dict]:
+    where = "WHERE status = %s" if status else ""
+    params: tuple = (status, limit) if status else (limit,)
+    return query(
+        f"""SELECT telefone, razao_social, cnpj, email, nome_contato,
+                   status, created_at, updated_at
+              FROM customers {where}
+             ORDER BY created_at DESC LIMIT %s""",
+        params,
+    )
+
+
 # --- Escrita durante o atendimento ---------------------------------------
 
 def upsert_conversation(

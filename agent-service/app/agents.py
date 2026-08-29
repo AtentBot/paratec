@@ -20,6 +20,7 @@ from . import store
 from .settings import settings
 from .tools import (
     BOLETOS_TOOLS,
+    CADASTRO_TOOLS,
     CATALOG_TOOLS,
     ENTREGA_TOOLS,
     PEDIDOS_TOOLS,
@@ -27,7 +28,7 @@ from .tools import (
 
 log = logging.getLogger("paratec.agents")
 
-ESPECIALISTAS = ("produtos", "pedidos", "entrega", "boletos")
+ESPECIALISTAS = ("cadastro", "produtos", "pedidos", "entrega", "boletos")
 
 # Ferramenta de handoff -> (tipo na fila humana, nome do argumento com o resumo)
 FILA_TOOLS = {
@@ -42,6 +43,17 @@ MARCA = (
     "responda SEMPRE em português do Brasil, cordial, objetivo e conciso. "
     "A empresa trabalha com ORÇAMENTO (não há preços)."
 )
+
+CADASTRO_PROMPT = f"""\
+Você é o especialista de CADASTRO da Paratec. {MARCA}
+No PRIMEIRO contato, use a ferramenta verificar_cliente (o número do cliente é
+automático — NUNCA peça o telefone). Se já for cadastrado, cumprimente pelo nome
+e diga que pode ajudar com o catálogo. Se NÃO for cadastrado, explique de forma
+cordial que, para atender, é preciso um cadastro rápido, e colete UM campo por
+vez, de forma natural: razão social, CNPJ, e-mail e nome do contato. A cada dado
+recebido, chame cadastrar_cliente (pode ser incremental). Se o CNPJ ou e-mail
+vier inválido, peça a correção gentilmente. Quando o cadastro ficar completo
+(status 'ativo'), confirme e informe que agora ele pode consultar os produtos."""
 
 PRODUTOS_PROMPT = f"""\
 Você é o especialista de PRODUTOS da Paratec. {MARCA}
@@ -67,13 +79,17 @@ explique que o financeiro/atendente humano dará sequência."""
 
 SUPERVISOR_PROMPT = """\
 Você é o supervisor do atendimento da Paratec (para-raios/SPDA) no WhatsApp.
-Roteie cada mensagem do cliente para UM especialista:
-- 'produtos': dúvidas sobre catálogo, produtos, materiais, dimensões, códigos/SKU, o que a empresa vende.
-- 'pedidos': fazer pedido, pedir orçamento, comprar, cotação.
-- 'entrega': status/prazo de entrega, rastreio de um pedido existente.
-- 'boletos': 2ª via de boleto, cobrança, financeiro.
-Se ambíguo, prefira 'produtos'. Não responda ao cliente diretamente; delegue.
-Responda sempre em português do Brasil."""
+REGRA DE CADASTRO (obrigatória): só clientes JÁ CADASTRADOS podem ser atendidos
+por produtos/pedidos/entrega/boletos. Se você não tem certeza de que o cliente
+está cadastrado, roteie para 'cadastro' PRIMEIRO — ele verifica e, se necessário,
+faz o cadastro. Só depois de cadastrado, roteie para os demais.
+Roteie cada mensagem para UM especialista:
+- 'cadastro': verificar se o cliente é cadastrado e cadastrar clientes novos (razão social, CNPJ, e-mail, contato).
+- 'produtos': catálogo, produtos, materiais, dimensões, códigos/SKU (apenas cadastrados).
+- 'pedidos': fazer pedido, orçamento, cotação (apenas cadastrados).
+- 'entrega': status/prazo/rastreio de pedido (apenas cadastrados).
+- 'boletos': 2ª via de boleto, cobrança, financeiro (apenas cadastrados).
+Não responda ao cliente diretamente; delegue. Responda sempre em português do Brasil."""
 
 
 @lru_cache(maxsize=1)
@@ -118,6 +134,7 @@ def get_app():
     """Compila a malha supervisor + especialistas (lazy)."""
     llm = _llm()
     especialistas = [
+        create_react_agent(llm, CADASTRO_TOOLS, prompt=CADASTRO_PROMPT, name="cadastro"),
         create_react_agent(llm, CATALOG_TOOLS, prompt=PRODUTOS_PROMPT, name="produtos"),
         create_react_agent(llm, PEDIDOS_TOOLS, prompt=PEDIDOS_PROMPT, name="pedidos"),
         create_react_agent(llm, ENTREGA_TOOLS, prompt=ENTREGA_PROMPT, name="entrega"),
@@ -190,6 +207,10 @@ def responder(
         if info["filas"]:
             store.set_status(thread_id, "humano")
             store.log_event("handoff_humano", thread_id=thread_id, especialista=routed)
+        # Reflete o cadastro na conversa (nome exibido na tela adm).
+        cust = store.get_customer(thread_id)
+        if cust and cust.get("razao_social"):
+            store.upsert_conversation(thread_id, cliente=cust["razao_social"])
     except Exception as e:  # pragma: no cover
         log.warning("persistência (saída) falhou: %s", e)
 

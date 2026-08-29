@@ -93,6 +93,21 @@ def assumir(thread_id: str):
     return c
 
 
+# --- Clientes (tela adm) ---------------------------------------------------
+
+@app.get("/clientes")
+def clientes(status: str | None = None, limit: int = Query(200, ge=1, le=1000)):
+    return store.list_customers(status, limit)
+
+
+@app.get("/clientes/{telefone}")
+def cliente(telefone: str):
+    c = store.get_customer(telefone)
+    if c is None:
+        raise HTTPException(status_code=404, detail="cliente não encontrado")
+    return c
+
+
 # --- Fila humana (tela adm) ------------------------------------------------
 
 @app.get("/fila")

@@ -8,6 +8,7 @@ import { ThemeToggle } from "./theme-toggle";
 const TITLES: Record<string, { title: string; sub: string }> = {
   "/": { title: "Dashboard", sub: "Visão geral do atendimento" },
   "/conversas": { title: "Conversas", sub: "Atendimentos no WhatsApp" },
+  "/clientes": { title: "Clientes", sub: "Cadastros via WhatsApp" },
   "/catalogo": { title: "Catálogo", sub: "Produtos, variantes e categorias" },
   "/fila": { title: "Fila humana", sub: "Pedidos, entregas e boletos" },
 };

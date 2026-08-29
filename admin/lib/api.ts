@@ -3,6 +3,7 @@
 import type {
   CatalogStats,
   Categoria,
+  Cliente,
   ConversaDetalhe,
   ConversaResumo,
   FilaItem,
@@ -46,6 +47,12 @@ export const api = {
   },
   produto: (idOrSlug: string) =>
     get<Produto>(`/catalog/produtos/${encodeURIComponent(idOrSlug)}`),
+
+  // Clientes
+  clientes: (status?: string) =>
+    get<Cliente[]>(`/clientes${status ? `?status=${status}` : ""}`),
+  cliente: (telefone: string) =>
+    get<Cliente>(`/clientes/${encodeURIComponent(telefone)}`),
 
   // Métricas
   metrics: () => get<Metrics>("/metrics/overview"),

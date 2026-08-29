@@ -30,5 +30,8 @@ def db():
     from app.db import execute
 
     store.ensure_schema()
-    execute("TRUNCATE messages, events, queue_items, conversations RESTART IDENTITY CASCADE")
+    execute(
+        "TRUNCATE messages, events, queue_items, conversations, customers "
+        "RESTART IDENTITY CASCADE"
+    )
     yield store

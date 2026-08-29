@@ -10,6 +10,25 @@
 -- checkpointer do LangGraph (PostgresSaver cria suas próprias tabelas).
 
 -- ---------------------------------------------------------------------------
+-- Clientes (cadastro por número de WhatsApp = telefone)
+-- status: 'pendente' (cadastro incompleto) | 'ativo' (todos os campos obrigatórios)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS customers (
+    telefone      TEXT PRIMARY KEY,
+    razao_social  TEXT,
+    cnpj          TEXT,
+    email         TEXT,
+    nome_contato  TEXT,
+    status        TEXT NOT NULL DEFAULT 'pendente'
+                    CHECK (status IN ('pendente', 'ativo')),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_customers_status ON customers(status);
+CREATE INDEX IF NOT EXISTS idx_customers_cnpj   ON customers(cnpj);
+
+-- ---------------------------------------------------------------------------
 -- Conversas (1 por thread; thread_id = número do WhatsApp)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS conversations (

@@ -1,13 +1,19 @@
 """Ferramentas expostas aos agentes LangGraph (finas sobre catalog.py)."""
 import json
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from . import catalog
+from . import catalog, store, validators
 
 
 def _json(data) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
+
+
+def _telefone(config: RunnableConfig) -> str:
+    """Número do WhatsApp da conversa atual (thread_id), injetado pelo grafo."""
+    return ((config or {}).get("configurable") or {}).get("thread_id", "")
 
 
 @tool
@@ -58,6 +64,71 @@ CATALOG_TOOLS = [
     listar_categorias,
     produtos_por_categoria,
 ]
+
+
+# ---------------------------------------------------------------------------
+# Cadastro de clientes. O número do WhatsApp (telefone) é o thread_id, injetado
+# via RunnableConfig — o modelo NÃO precisa (nem deve) pedir/adivinhar o número.
+# ---------------------------------------------------------------------------
+@tool
+def verificar_cliente(config: RunnableConfig) -> str:
+    """Verifica se o cliente ATUAL (número do WhatsApp) já é cadastrado.
+    Chame SEMPRE no início do atendimento. Retorna se está cadastrado e, se
+    não, quais campos faltam para o cadastro."""
+    tel = _telefone(config)
+    c = store.get_customer(tel)
+    if c and c["status"] == "ativo":
+        return _json({
+            "cadastrado": True,
+            "razao_social": c["razao_social"],
+            "nome_contato": c["nome_contato"],
+        })
+    preenchidos = {k: (c or {}).get(k) for k in store.CAMPOS_CADASTRO}
+    faltam = [k for k, v in preenchidos.items() if not v]
+    return _json({"cadastrado": False, "faltam": faltam, "preenchidos": preenchidos})
+
+
+@tool
+def cadastrar_cliente(
+    config: RunnableConfig,
+    razao_social: str | None = None,
+    cnpj: str | None = None,
+    email: str | None = None,
+    nome_contato: str | None = None,
+) -> str:
+    """Cadastra/atualiza o cliente novo com os dados coletados na conversa
+    (razão social, CNPJ, e-mail, nome do contato). Pode ser chamada de forma
+    incremental (só com os campos que já tem). Valida CNPJ e e-mail e informa
+    o que ainda falta; quando tudo estiver preenchido, o cadastro fica 'ativo'."""
+    tel = _telefone(config)
+    if not tel:
+        return _json({"erro": "número do cliente indisponível na sessão"})
+
+    campos: dict = {}
+    if razao_social:
+        campos["razao_social"] = razao_social.strip()
+    if nome_contato:
+        campos["nome_contato"] = nome_contato.strip()
+    if email:
+        if not validators.email_valido(email):
+            return _json({"ok": False, "erro": "e-mail inválido", "campo": "email"})
+        campos["email"] = email.strip()
+    if cnpj:
+        if not validators.cnpj_valido(cnpj):
+            return _json({"ok": False, "erro": "CNPJ inválido", "campo": "cnpj"})
+        campos["cnpj"] = validators.cnpj_formatado(cnpj)
+
+    c = store.upsert_customer(tel, **campos)
+    faltam = [k for k in store.CAMPOS_CADASTRO if not c.get(k)]
+    return _json({
+        "ok": True,
+        "status": c["status"],
+        "faltam": faltam,
+        "concluido": c["status"] == "ativo",
+    })
+
+
+CADASTRO_TOOLS = [verificar_cliente, cadastrar_cliente]
 
 
 # ---------------------------------------------------------------------------

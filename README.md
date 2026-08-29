@@ -118,9 +118,12 @@ python3 scraper/extract.py
 - [x] `docker-compose` da stack (Evolution + N8N + agent-service + Postgres + Redis).
 - [x] **Tela administrativa** (`admin/`, Next.js): Dashboard, Conversas, Catálogo e Fila humana —
       **todas com dados reais** do agent-service (sem mocks). Rodar: `cd admin && npm install && npm run dev`.
-- [x] **Persistência operacional** (`db/schema_ops.sql`): conversas, mensagens, eventos e fila.
+- [x] **Persistência operacional** (`db/schema_ops.sql`): clientes, conversas, mensagens, eventos e fila.
       O `agent-service` grava durante o atendimento (checkpointer PostgresSaver) e expõe
-      `/conversas`, `/fila`, `/metrics/overview`. Schema aplicado no startup (idempotente).
+      `/clientes`, `/conversas`, `/fila`, `/metrics/overview`. Schema aplicado no startup (idempotente).
+- [x] **Cadastro de clientes via WhatsApp**: número novo é cadastrado (razão social, CNPJ,
+      e-mail, contato) ANTES de liberar o catálogo — especialista `cadastro` + tools
+      `verificar_cliente`/`cadastrar_cliente` (CNPJ/e-mail validados). Seção "Clientes" na adm.
 - [x] **Testes** (`agent-service/tests/`, pytest): unitários + integração (pulam sem DB) + wiring HTTP.
 - [x] **Verificação local** ponta-a-ponta: `bash scripts/dev_test.sh` (Postgres efêmero + catálogo real + smoke).
 - [ ] **`GOOGLE_API_KEY`** (Gemini) para o agente responder (LLM). Camada de dados já validada.
