@@ -84,6 +84,70 @@ def listar_categorias() -> list[dict]:
     )
 
 
+def listar_produtos(
+    termo: str | None = None,
+    categoria: str | None = None,
+    limite: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """Lista produtos (com contagem de variantes) para a tela adm.
+
+    Filtra por texto (`termo`) e/ou `categoria` quando informados; pagina via
+    `limite`/`offset`. Cada item traz `n_variantes` e a lista `categorias`.
+    """
+    where, params = [], []
+    if termo:
+        like = f"%{termo}%"
+        where.append(
+            "(p.title ILIKE %s OR p.description ILIKE %s OR EXISTS ("
+            " SELECT 1 FROM product_variants v WHERE v.product_id = p.id"
+            " AND (v.sku ILIKE %s OR v.description ILIKE %s OR v.material ILIKE %s)))"
+        )
+        params += [like, like, like, like, like]
+    if categoria:
+        where.append(
+            "EXISTS (SELECT 1 FROM product_categories pc JOIN categories c"
+            " ON c.id = pc.category_id WHERE pc.product_id = p.id AND c.name ILIKE %s)"
+        )
+        params.append(f"%{categoria}%")
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    rows = query(
+        f"""
+        SELECT p.id, p.title, p.slug, p.source_url,
+               (SELECT count(*) FROM product_variants v WHERE v.product_id = p.id)
+                   AS n_variantes
+          FROM products p
+          {clause}
+         ORDER BY p.title
+         LIMIT %s OFFSET %s
+        """,
+        (*params, limite, offset),
+    )
+    for r in rows:
+        r["categorias"] = [
+            c["name"]
+            for c in query(
+                """SELECT c.name FROM categories c
+                     JOIN product_categories pc ON pc.category_id = c.id
+                    WHERE pc.product_id = %s ORDER BY c.name""",
+                (r["id"],),
+            )
+        ]
+    return rows
+
+
+def contar_totais() -> dict:
+    """Totais do catálogo para os cards do dashboard."""
+    return query(
+        """
+        SELECT
+          (SELECT count(*) FROM products)         AS produtos,
+          (SELECT count(*) FROM product_variants) AS variantes,
+          (SELECT count(*) FROM categories)       AS categorias
+        """
+    )[0]
+
+
 def produtos_por_categoria(categoria: str, limite: int = 20) -> list[dict]:
     return query(
         """SELECT p.title, p.slug, p.source_url

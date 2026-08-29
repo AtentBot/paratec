@@ -1,0 +1,16 @@
+# Contexto de build do agent-service = raiz do repo. Exclua tudo que é pesado
+# ou irrelevante para a imagem (a imagem só precisa de agent-service/ e db/).
+.git
+**/.venv
+**/node_modules
+**/.next
+admin
+scraper
+n8n
+data/raw
+**/__pycache__
+*.pyc
+.env
+.env.*
+projeto.txt
+*.log

@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design system Paratec Admin
+ * -------------------------------------------------------------
+ * Base: cinza-ardósia frio e sóbrio. Acento "raio" âmbar/ouro
+ * (domínio SPDA / para-raios). Um único acento forte, semânticas
+ * discretas. Tema claro por padrão, escuro via classe .dark no <html>.
+ */
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo,
+    Consolas, "Liberation Mono", monospace;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f9fafb;
+  --border: #e6e8ec;
+  --ink: #0d1526;
+  --muted: #5b6577;
+  --faint: #99a1b0;
+
+  --accent: #e8990c; /* âmbar-ouro "raio" */
+  --accent-soft: #fbe6bd;
+  --accent-ink: #7a4d00;
+
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --info: #2563eb;
+
+  /* Painel/botão "escuro de destaque" — fixo nos dois temas (não segue --ink,
+     que inverte). Usado no card em destaque, botões primários e chips ativos. */
+  --feature-bg: #111a2c;
+  --feature-fg: #ffffff;
+}
+
+.dark {
+  --bg: #0a0e16;
+  --surface: #111725;
+  --surface-2: #0d1320;
+  --border: #1e2636;
+  --ink: #eef1f6;
+  --muted: #9aa4b5;
+  --faint: #63708a;
+
+  --accent: #f7b73b;
+  --accent-soft: #4a3410;
+  --accent-ink: #f7b73b;
+
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+
+  /* Levemente elevado/azulado p/ destacar do surface (#111725) no dark. */
+  --feature-bg: #1e2942;
+  --feature-fg: #ffffff;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Scrollbar discreta e coerente com o tema */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+  border: 3px solid var(--bg);
+}
+
+/* Numerais tabulares para tabelas e métricas */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Gradiente sutil "aurora" para o cabeçalho do dashboard */
+.aurora {
+  background:
+    radial-gradient(60% 120% at 100% 0%, var(--accent-soft) 0%, transparent 55%),
+    linear-gradient(180deg, var(--surface) 0%, var(--surface) 100%);
+}

@@ -25,3 +25,22 @@ def query(sql: str, params: tuple = ()) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             return cur.fetchall()
+
+
+def execute(sql: str, params: tuple = (), *, returning: bool = False):
+    """Executa INSERT/UPDATE/DDL (commit no fim do bloco `with`).
+
+    Com `returning=True`, devolve as linhas do RETURNING; senão, None.
+    """
+    with get_pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            if returning:
+                return cur.fetchall()
+    return None
+
+
+def execute_script(sql: str) -> None:
+    """Executa um script SQL multi-statement (ex: schema idempotente)."""
+    with get_pool().connection() as conn:
+        conn.execute(sql)

@@ -12,14 +12,21 @@ class Settings(BaseSettings):
     pguser: str = "postgres"
     pgpassword: str = ""
 
-    # LLM (Google Gemini). Default = flash (rápido/barato p/ alto volume);
-    # troque para gemini-2.5-pro (mais capaz) se preferir.
+    # LLM (Google Gemini). Default = alias flash-latest (aponta sempre pro flash
+    # atual, à prova de deprecação); troque para gemini-pro-latest (mais capaz).
     google_api_key: str = ""
-    llm_model: str = "gemini-2.5-flash"
+    llm_model: str = "gemini-flash-latest"
 
     # Servidor
     app_host: str = "0.0.0.0"
     app_port: int = 8000
+
+    # Origens liberadas p/ CORS (tela adm). CSV no env CORS_ORIGINS.
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def pg_dsn(self) -> str:

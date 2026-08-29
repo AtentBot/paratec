@@ -116,6 +116,13 @@ python3 scraper/extract.py
 - [x] Catálogo completo: 129 produtos / 293 variantes / 16 categorias no Postgres.
 - [x] Serviço de agentes (LangGraph) — especialista de produtos + API `/chat`.
 - [x] `docker-compose` da stack (Evolution + N8N + agent-service + Postgres + Redis).
+- [x] **Tela administrativa** (`admin/`, Next.js): Dashboard, Conversas, Catálogo e Fila humana —
+      **todas com dados reais** do agent-service (sem mocks). Rodar: `cd admin && npm install && npm run dev`.
+- [x] **Persistência operacional** (`db/schema_ops.sql`): conversas, mensagens, eventos e fila.
+      O `agent-service` grava durante o atendimento (checkpointer PostgresSaver) e expõe
+      `/conversas`, `/fila`, `/metrics/overview`. Schema aplicado no startup (idempotente).
+- [x] **Testes** (`agent-service/tests/`, pytest): unitários + integração (pulam sem DB) + wiring HTTP.
+- [x] **Verificação local** ponta-a-ponta: `bash scripts/dev_test.sh` (Postgres efêmero + catálogo real + smoke).
 - [ ] **`GOOGLE_API_KEY`** (Gemini) para o agente responder (LLM). Camada de dados já validada.
 - [ ] Subir a stack no Hetzner (Portainer) e montar o fluxo no N8N (webhook Evolution → `/chat` → sendText).
 - [ ] Provisionar **pgvector** no Postgres de produção e aplicar `db/schema_vector.sql` (RAG).

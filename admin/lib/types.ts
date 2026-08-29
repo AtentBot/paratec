@@ -1,0 +1,101 @@
+// Tipos do domínio Paratec — espelham as respostas do agent-service (FastAPI).
+
+export type Especialista = "produtos" | "pedidos" | "entrega" | "boletos";
+export type ConversaStatus = "ia" | "humano" | "resolvida";
+
+// --- Catálogo -------------------------------------------------------------
+
+export interface Variante {
+  sku: string;
+  material: string | null;
+  dimensions: string | null;
+  description: string | null;
+  attributes?: Record<string, unknown> | string | null;
+}
+
+export interface Produto {
+  id: number;
+  title: string;
+  slug: string;
+  source_url: string | null;
+  n_variantes?: number;
+  categorias?: string[];
+  variantes?: Variante[];
+}
+
+export interface Categoria {
+  name: string;
+  n_produtos: number;
+}
+
+export interface CatalogStats {
+  produtos: number;
+  variantes: number;
+  categorias: number;
+}
+
+// --- Conversas ------------------------------------------------------------
+
+export type MsgRole = "cliente" | "agente" | "humano";
+
+export interface Mensagem {
+  role: MsgRole;
+  content: string;
+  especialista: string | null;
+  created_at: string;
+}
+
+export interface ConversaResumo {
+  thread_id: string;
+  cliente: string | null;
+  telefone: string | null;
+  status: ConversaStatus;
+  especialista: string | null;
+  unread: number;
+  last_preview: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversaDetalhe extends ConversaResumo {
+  mensagens: Mensagem[];
+}
+
+// --- Fila humana ----------------------------------------------------------
+
+export type FilaTipo = "pedido" | "entrega" | "boleto";
+export type FilaStatus = "novo" | "andamento" | "concluido";
+
+export interface FilaItem {
+  id: number;
+  tipo: FilaTipo;
+  thread_id: string | null;
+  cliente: string | null;
+  telefone: string | null;
+  resumo: string;
+  status: FilaStatus;
+  responsavel: string | null;
+  payload?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- Métricas -------------------------------------------------------------
+
+export interface MetricaDia {
+  dia: string; // ISO date
+  atendimentos: number;
+  humano: number;
+}
+
+export interface Metrics {
+  semana: MetricaDia[];
+  especialistas: { nome: string; valor: number }[];
+  totais: {
+    conversas: number;
+    atendimentos: number;
+    handoffs: number;
+    na_fila: number;
+    resolvidos_pct: number;
+  };
+}

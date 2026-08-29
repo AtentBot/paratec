@@ -9,13 +9,14 @@ Um SUPERVISOR roteia cada mensagem do cliente para o especialista adequado:
 Adicionar um novo especialista = criar um react agent com suas ferramentas e
 incluí-lo na lista `especialistas` abaixo.
 """
+import logging
 from functools import lru_cache
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
 
+from . import store
 from .settings import settings
 from .tools import (
     BOLETOS_TOOLS,
@@ -23,6 +24,17 @@ from .tools import (
     ENTREGA_TOOLS,
     PEDIDOS_TOOLS,
 )
+
+log = logging.getLogger("paratec.agents")
+
+ESPECIALISTAS = ("produtos", "pedidos", "entrega", "boletos")
+
+# Ferramenta de handoff -> (tipo na fila humana, nome do argumento com o resumo)
+FILA_TOOLS = {
+    "registrar_pedido": ("pedido", "resumo"),
+    "consultar_entrega": ("entrega", "identificador"),
+    "segunda_via_boleto": ("boleto", "identificador"),
+}
 
 MARCA = (
     "A Paratec fabrica sistemas de Proteção contra Descargas Atmosféricas "
@@ -76,8 +88,34 @@ def _llm() -> ChatGoogleGenerativeAI:
 
 
 @lru_cache(maxsize=1)
+def _checkpointer():
+    """Persiste o estado do agente por thread. Usa PostgresSaver (durável entre
+    reinícios); cai para MemorySaver se o Postgres/pacote não estiver disponível."""
+    try:
+        from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg_pool import ConnectionPool
+
+        pool = ConnectionPool(
+            settings.pg_dsn,
+            kwargs={"autocommit": True},
+            min_size=1,
+            max_size=3,
+            open=True,
+        )
+        cp = PostgresSaver(pool)
+        cp.setup()
+        log.info("checkpointer: PostgresSaver ativo")
+        return cp
+    except Exception as e:  # pragma: no cover - fallback de resiliência
+        from langgraph.checkpoint.memory import MemorySaver
+
+        log.warning("checkpointer: PostgresSaver indisponível (%s); usando MemorySaver", e)
+        return MemorySaver()
+
+
+@lru_cache(maxsize=1)
 def get_app():
-    """Compila a malha supervisor + especialistas (lazy, memória por thread)."""
+    """Compila a malha supervisor + especialistas (lazy)."""
     llm = _llm()
     especialistas = [
         create_react_agent(llm, CATALOG_TOOLS, prompt=PRODUTOS_PROMPT, name="produtos"),
@@ -90,16 +128,69 @@ def get_app():
         model=llm,
         prompt=SUPERVISOR_PROMPT,
     )
-    return workflow.compile(checkpointer=MemorySaver())
+    return workflow.compile(checkpointer=_checkpointer())
 
 
-def responder(mensagem: str, thread_id: str) -> str:
-    """Processa uma mensagem do cliente e devolve a resposta em texto.
+def _analisar(messages) -> dict:
+    """Extrai do resultado do grafo: especialista roteado e intenções de fila
+    (chamadas às ferramentas de handoff, com o resumo do cliente)."""
+    routed: str | None = None
+    filas: list[tuple[str, str]] = []
+    for m in messages:
+        nome = getattr(m, "name", None)
+        if nome in ESPECIALISTAS:
+            routed = nome
+        for tc in getattr(m, "tool_calls", None) or []:
+            tool = tc.get("name") if isinstance(tc, dict) else None
+            if tool in FILA_TOOLS:
+                tipo, arg = FILA_TOOLS[tool]
+                args = tc.get("args", {}) if isinstance(tc, dict) else {}
+                resumo = str(args.get(arg) or "").strip() or f"{tipo} sem detalhes"
+                filas.append((tipo, resumo))
+    return {"routed": routed, "filas": filas}
 
-    `thread_id` mantém o histórico da conversa (ex: número do WhatsApp).
+
+def responder(
+    mensagem: str,
+    thread_id: str,
+    cliente: str | None = None,
+    telefone: str | None = None,
+) -> str:
+    """Processa uma mensagem do cliente, PERSISTE o atendimento e devolve o texto.
+
+    `thread_id` mantém o histórico (ex: número do WhatsApp). A persistência é
+    best-effort: uma falha de banco nunca impede a resposta ao cliente.
     """
+    try:
+        store.upsert_conversation(thread_id, cliente, telefone)
+        store.add_message(thread_id, "cliente", mensagem)
+        store.log_event("mensagem_recebida", thread_id=thread_id)
+    except Exception as e:  # pragma: no cover
+        log.warning("persistência (entrada) falhou: %s", e)
+
     result = get_app().invoke(
         {"messages": [{"role": "user", "content": mensagem}]},
         config={"configurable": {"thread_id": thread_id}},
     )
-    return result["messages"][-1].content
+    resposta = result["messages"][-1].content
+
+    try:
+        info = _analisar(result["messages"])
+        routed = info["routed"]
+        store.add_message(thread_id, "agente", resposta, especialista=routed)
+        store.log_event("resposta_enviada", thread_id=thread_id, especialista=routed)
+        if routed:
+            store.log_event("roteou_especialista", thread_id=thread_id, especialista=routed)
+        for tipo, resumo in info["filas"]:
+            store.add_queue_item(
+                tipo, resumo, thread_id=thread_id, cliente=cliente, telefone=telefone
+            )
+            store.log_event("fila_criada", thread_id=thread_id, especialista=routed,
+                            meta={"tipo": tipo})
+        if info["filas"]:
+            store.set_status(thread_id, "humano")
+            store.log_event("handoff_humano", thread_id=thread_id, especialista=routed)
+    except Exception as e:  # pragma: no cover
+        log.warning("persistência (saída) falhou: %s", e)
+
+    return resposta
