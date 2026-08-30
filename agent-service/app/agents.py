@@ -148,6 +148,27 @@ def get_app():
     return workflow.compile(checkpointer=_checkpointer())
 
 
+def _extrair_texto(content) -> str:
+    """Normaliza o `content` da mensagem do agente para texto puro.
+
+    Modelos Gemini 3.x (langchain-google-genai) podem devolver o conteúdo como
+    LISTA de blocos ({'type': 'text', 'text': ...}) em vez de string — é preciso
+    concatenar os trechos de texto para enviar ao WhatsApp."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        partes = []
+        for bloco in content:
+            if isinstance(bloco, dict):
+                t = bloco.get("text")
+                if t:
+                    partes.append(t)
+            elif isinstance(bloco, str):
+                partes.append(bloco)
+        return "\n".join(partes).strip()
+    return str(content)
+
+
 def _analisar(messages) -> dict:
     """Extrai do resultado do grafo: especialista roteado e intenções de fila
     (chamadas às ferramentas de handoff, com o resumo do cliente)."""
@@ -189,7 +210,7 @@ def responder(
         {"messages": [{"role": "user", "content": mensagem}]},
         config={"configurable": {"thread_id": thread_id}},
     )
-    resposta = result["messages"][-1].content
+    resposta = _extrair_texto(result["messages"][-1].content)
 
     try:
         info = _analisar(result["messages"])
