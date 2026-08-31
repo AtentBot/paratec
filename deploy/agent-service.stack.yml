@@ -1,0 +1,49 @@
+# Stack do Portainer para o agent-service (cérebro dos agentes).
+# A Evolution e o N8N já rodam no Hetzner; este stack adiciona só o agent-service
+# e o conecta à MESMA rede do N8N, para o N8N chamar http://agent-service:8000/chat.
+#
+# Como usar no Portainer:
+#   Stacks -> Add stack -> Repository
+#     Repository URL: https://github.com/AtentBot/paratec
+#     Compose path:   deploy/agent-service.stack.yml
+#   Em "Environment variables", preencha as marcadas com <...>.
+#   (Ou faça upload deste arquivo em "Web editor".)
+#
+# IMPORTANTE: ajuste `networks` abaixo para a rede onde o N8N está.
+# Descubra o nome com:  docker network ls   (ex: paratec_default, n8n_default...)
+
+services:
+  agent-service:
+    build:
+      context: .
+      dockerfile: agent-service/Dockerfile
+    image: paratec/agent-service:latest
+    restart: unless-stopped
+    environment:
+      # Catálogo: Postgres de produção (já tem os 129 produtos).
+      PGHOST: ${PGHOST:-pg.atentbot.com}
+      PGPORT: ${PGPORT:-5432}
+      PGDATABASE: ${PGDATABASE:-paratec}
+      PGUSER: ${PGUSER:-postgres}
+      PGPASSWORD: ${PGPASSWORD:?defina no Portainer}
+      # LLM (a chave que funcionou, com prepay ativo).
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?defina no Portainer}
+      LLM_MODEL: ${LLM_MODEL:-gemini-flash-latest}
+      # Envio de saída pelo painel (opcional): URL interna da Evolution + chave.
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-paratec}
+      # Libera o painel (admin) a chamar a API, se for hospedado.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "8000:8000"   # exponha se o N8N chamar via host; se via rede, pode remover
+    networks:
+      - stack
+
+# Troque `external: true` + `name:` pela rede real do N8N para que o N8N
+# alcance o agente por http://agent-service:8000. Se preferir isolar e chamar
+# pelo IP do host:porta 8000, deixe como bridge simples.
+networks:
+  stack:
+    external: true
+    name: ${SHARED_NETWORK:-bridge}
