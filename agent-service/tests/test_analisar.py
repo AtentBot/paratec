@@ -9,10 +9,9 @@ def _msg(name=None, tool_calls=None):
     return SimpleNamespace(name=name, tool_calls=tool_calls or [])
 
 
-def test_detecta_especialista_roteado():
+def test_detecta_especialista_pela_ferramenta():
     msgs = [
-        _msg(name="supervisor"),
-        _msg(name="produtos"),
+        _msg(tool_calls=[{"name": "buscar_produtos", "args": {"termo": "captor"}}]),
     ]
     info = _analisar(msgs)
     assert info["routed"] == "produtos"

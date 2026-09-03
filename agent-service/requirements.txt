@@ -1,5 +1,4 @@
 langgraph>=0.2.50
-langgraph-supervisor>=0.0.9
 langgraph-checkpoint-postgres>=2.0
 langchain-google-genai>=2.0
 langchain-core>=0.3

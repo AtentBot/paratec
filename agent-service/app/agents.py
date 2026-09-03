@@ -1,20 +1,17 @@
-"""Malha de agentes da Paratec (LangGraph) — arquitetura supervisor + especialistas.
+"""Agente de atendimento da Paratec (LangGraph) — AGENTE ÚNICO.
 
-Um SUPERVISOR roteia cada mensagem do cliente para o especialista adequado:
-  - produtos  : catálogo, materiais, dimensões, códigos (SKU) — COMPLETO
-  - pedidos   : registrar pedido/orçamento — stub (encaminha p/ humano)
-  - entrega   : status de entrega        — stub (encaminha p/ humano)
-  - boletos   : 2ª via de boleto          — stub (encaminha p/ humano)
-
-Adicionar um novo especialista = criar um react agent com suas ferramentas e
-incluí-lo na lista `especialistas` abaixo.
+Um único react agent com todas as ferramentas (cadastro, catálogo, pedidos,
+entrega, boletos). Substitui a antiga malha supervisor+especialistas, que
+quebrava com o Gemini 3.x: as ferramentas de handoff do langgraph-supervisor
+(transfer_*) não preservam as "thought signatures" exigidas pelo Gemini 3,
+gerando 400 INVALID_ARGUMENT. O agente único evita isso e é mais rápido
+(menos chamadas ao LLM por mensagem).
 """
 import logging
 from functools import lru_cache
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
-from langgraph_supervisor import create_supervisor
 
 from . import store
 from .settings import settings
@@ -28,13 +25,24 @@ from .tools import (
 
 log = logging.getLogger("paratec.agents")
 
-ESPECIALISTAS = ("cadastro", "produtos", "pedidos", "entrega", "boletos")
+# Todas as ferramentas em um só agente.
+ALL_TOOLS = CADASTRO_TOOLS + CATALOG_TOOLS + PEDIDOS_TOOLS + ENTREGA_TOOLS + BOLETOS_TOOLS
 
 # Ferramenta de handoff -> (tipo na fila humana, nome do argumento com o resumo)
 FILA_TOOLS = {
     "registrar_pedido": ("pedido", "resumo"),
     "consultar_entrega": ("entrega", "identificador"),
     "segunda_via_boleto": ("boleto", "identificador"),
+}
+
+# Ferramenta -> especialista (para as métricas do dashboard).
+TOOL_ESPECIALISTA = {
+    "verificar_cliente": "cadastro", "cadastrar_cliente": "cadastro",
+    "buscar_produtos": "produtos", "detalhes_produto": "produtos",
+    "buscar_por_sku": "produtos", "listar_categorias": "produtos",
+    "produtos_por_categoria": "produtos",
+    "registrar_pedido": "pedidos", "consultar_entrega": "entrega",
+    "segunda_via_boleto": "boletos",
 }
 
 MARCA = (
@@ -44,52 +52,31 @@ MARCA = (
     "A empresa trabalha com ORÇAMENTO (não há preços)."
 )
 
-CADASTRO_PROMPT = f"""\
-Você é o especialista de CADASTRO da Paratec. {MARCA}
-No PRIMEIRO contato, use a ferramenta verificar_cliente (o número do cliente é
-automático — NUNCA peça o telefone). Se já for cadastrado, cumprimente pelo nome
-e diga que pode ajudar com o catálogo. Se NÃO for cadastrado, explique de forma
-cordial que, para atender, é preciso um cadastro rápido, e colete UM campo por
-vez, de forma natural: razão social, CNPJ, e-mail e nome do contato. A cada dado
-recebido, chame cadastrar_cliente (pode ser incremental). Se o CNPJ ou e-mail
-vier inválido, peça a correção gentilmente. Quando o cadastro ficar completo
-(status 'ativo'), confirme e informe que agora ele pode consultar os produtos."""
+ATENDENTE_PROMPT = f"""\
+Você é o atendente virtual da Paratec no WhatsApp. {MARCA}
 
-PRODUTOS_PROMPT = f"""\
-Você é o especialista de PRODUTOS da Paratec. {MARCA}
-Use as ferramentas de catálogo para responder sobre produtos, materiais,
-dimensões e códigos (SKU). NUNCA invente produtos, códigos ou especificações;
-se não achar no catálogo, diga que vai verificar com a equipe. Ao citar um
-produto, informe o(s) SKU(s) e material/dimensão relevantes."""
+CADASTRO (obrigatório antes de atender): no início da conversa, chame
+verificar_cliente (o número do cliente é automático — NUNCA peça o telefone).
+- Se NÃO for cadastrado: explique cordialmente que, para atender, é preciso um
+  cadastro rápido e colete UM campo por vez, de forma natural: razão social,
+  CNPJ, e-mail e nome do contato. A cada dado, chame cadastrar_cliente (pode ser
+  incremental). Se CNPJ/e-mail vier inválido, peça a correção gentilmente. Só
+  depois do cadastro completo (status 'ativo') prossiga para produtos/pedidos.
+- Se JÁ for cadastrado: cumprimente pelo nome e atenda normalmente.
 
-PEDIDOS_PROMPT = f"""\
-Você é o especialista de PEDIDOS/ORÇAMENTOS da Paratec. {MARCA}
-Colete produto/SKU, quantidade e cidade/UF e registre com a ferramenta.
-Deixe claro que um vendedor dará sequência ao orçamento."""
+PRODUTOS: use as ferramentas de catálogo (buscar_produtos, detalhes_produto,
+buscar_por_sku, listar_categorias, produtos_por_categoria). NUNCA invente
+produtos, códigos ou especificações; se não achar, diga que vai verificar com a
+equipe. Ao citar um produto, informe o(s) SKU(s) e material/dimensão.
 
-ENTREGA_PROMPT = f"""\
-Você é o especialista de ENTREGA da Paratec. {MARCA}
-Peça o número do pedido e consulte o status. A integração ainda não está
-disponível; nesse caso explique que um atendente humano dará sequência."""
+PEDIDOS/ORÇAMENTOS: colete produto/SKU, quantidade e cidade/UF e registre com
+registrar_pedido. Deixe claro que um vendedor dará sequência.
 
-BOLETOS_PROMPT = f"""\
-Você é o especialista de BOLETOS da Paratec. {MARCA}
-Ajude com 2ª via de boleto. A integração ainda não está disponível; nesse caso
-explique que o financeiro/atendente humano dará sequência."""
+ENTREGA: use consultar_entrega com o número do pedido. Se indisponível, explique
+que um atendente humano dará sequência.
 
-SUPERVISOR_PROMPT = """\
-Você é o supervisor do atendimento da Paratec (para-raios/SPDA) no WhatsApp.
-REGRA DE CADASTRO (obrigatória): só clientes JÁ CADASTRADOS podem ser atendidos
-por produtos/pedidos/entrega/boletos. Se você não tem certeza de que o cliente
-está cadastrado, roteie para 'cadastro' PRIMEIRO — ele verifica e, se necessário,
-faz o cadastro. Só depois de cadastrado, roteie para os demais.
-Roteie cada mensagem para UM especialista:
-- 'cadastro': verificar se o cliente é cadastrado e cadastrar clientes novos (razão social, CNPJ, e-mail, contato).
-- 'produtos': catálogo, produtos, materiais, dimensões, códigos/SKU (apenas cadastrados).
-- 'pedidos': fazer pedido, orçamento, cotação (apenas cadastrados).
-- 'entrega': status/prazo/rastreio de pedido (apenas cadastrados).
-- 'boletos': 2ª via de boleto, cobrança, financeiro (apenas cadastrados).
-Não responda ao cliente diretamente; delegue. Responda sempre em português do Brasil."""
+BOLETOS: use segunda_via_boleto. Se indisponível, explique que o financeiro/
+atendente humano dará sequência."""
 
 
 @lru_cache(maxsize=1)
@@ -131,21 +118,10 @@ def _checkpointer():
 
 @lru_cache(maxsize=1)
 def get_app():
-    """Compila a malha supervisor + especialistas (lazy)."""
-    llm = _llm()
-    especialistas = [
-        create_react_agent(llm, CADASTRO_TOOLS, prompt=CADASTRO_PROMPT, name="cadastro"),
-        create_react_agent(llm, CATALOG_TOOLS, prompt=PRODUTOS_PROMPT, name="produtos"),
-        create_react_agent(llm, PEDIDOS_TOOLS, prompt=PEDIDOS_PROMPT, name="pedidos"),
-        create_react_agent(llm, ENTREGA_TOOLS, prompt=ENTREGA_PROMPT, name="entrega"),
-        create_react_agent(llm, BOLETOS_TOOLS, prompt=BOLETOS_PROMPT, name="boletos"),
-    ]
-    workflow = create_supervisor(
-        especialistas,
-        model=llm,
-        prompt=SUPERVISOR_PROMPT,
+    """Compila o agente único de atendimento (lazy)."""
+    return create_react_agent(
+        _llm(), ALL_TOOLS, prompt=ATENDENTE_PROMPT, checkpointer=_checkpointer()
     )
-    return workflow.compile(checkpointer=_checkpointer())
 
 
 def _extrair_texto(content) -> str:
@@ -170,16 +146,17 @@ def _extrair_texto(content) -> str:
 
 
 def _analisar(messages) -> dict:
-    """Extrai do resultado do grafo: especialista roteado e intenções de fila
-    (chamadas às ferramentas de handoff, com o resumo do cliente)."""
+    """Extrai do resultado: especialista (inferido pela ferramenta usada) e
+    intenções de fila (chamadas às ferramentas de handoff, com o resumo)."""
     routed: str | None = None
     filas: list[tuple[str, str]] = []
     for m in messages:
-        nome = getattr(m, "name", None)
-        if nome in ESPECIALISTAS:
-            routed = nome
         for tc in getattr(m, "tool_calls", None) or []:
             tool = tc.get("name") if isinstance(tc, dict) else None
+            if not tool:
+                continue
+            if tool in TOOL_ESPECIALISTA:
+                routed = TOOL_ESPECIALISTA[tool]
             if tool in FILA_TOOLS:
                 tipo, arg = FILA_TOOLS[tool]
                 args = tc.get("args", {}) if isinstance(tc, dict) else {}
