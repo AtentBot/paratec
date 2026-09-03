@@ -28,10 +28,10 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://agent-service:8000/chat",
+        "url": "http://paratec-agent:8000/chat",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"mensagem\": {{ JSON.stringify($json.mensagem) }},\n  \"thread_id\": {{ JSON.stringify($json.thread_id) }}\n}",
+        "jsonBody": "={\n  \"mensagem\": {{ JSON.stringify($json.mensagem) }},\n  \"thread_id\": {{ JSON.stringify($json.thread_id) }},\n  \"telefone\": {{ JSON.stringify($json.number) }}\n}",
         "options": {}
       },
       "id": "chamar-agente",
