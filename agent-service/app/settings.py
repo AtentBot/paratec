@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     # atual, à prova de deprecação); troque para gemini-pro-latest (mais capaz).
     google_api_key: str = ""
     llm_model: str = "gemini-flash-latest"
+    # Memória da conversa: "memory" (padrão, em processo) | "postgres" (durável).
+    checkpointer: str = "memory"
 
     # Servidor
     app_host: str = "0.0.0.0"

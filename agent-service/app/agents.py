@@ -92,28 +92,35 @@ def _llm() -> ChatGoogleGenerativeAI:
 
 @lru_cache(maxsize=1)
 def _checkpointer():
-    """Persiste o estado do agente por thread. Usa PostgresSaver (durável entre
-    reinícios); cai para MemorySaver se o Postgres/pacote não estiver disponível."""
-    try:
-        from langgraph.checkpoint.postgres import PostgresSaver
-        from psycopg_pool import ConnectionPool
+    """Memória da conversa por thread.
 
-        pool = ConnectionPool(
-            settings.pg_dsn,
-            kwargs={"autocommit": True},
-            min_size=1,
-            max_size=3,
-            open=True,
-        )
-        cp = PostgresSaver(pool)
-        cp.setup()
-        log.info("checkpointer: PostgresSaver ativo")
-        return cp
-    except Exception as e:  # pragma: no cover - fallback de resiliência
-        from langgraph.checkpoint.memory import MemorySaver
+    Padrão = MemorySaver (em processo): robusto, sem dependência de banco no
+    caminho crítico da resposta — a durabilidade do histórico fica nas tabelas
+    (store). PostgresSaver é OPCIONAL via LLM checkpointer=postgres (só quando
+    o pool estiver estável; hoje o Postgres fechava a conexão no meio da query)."""
+    from langgraph.checkpoint.memory import MemorySaver
 
-        log.warning("checkpointer: PostgresSaver indisponível (%s); usando MemorySaver", e)
-        return MemorySaver()
+    if settings.checkpointer.lower() == "postgres":
+        try:
+            from langgraph.checkpoint.postgres import PostgresSaver
+            from psycopg_pool import ConnectionPool
+
+            pool = ConnectionPool(
+                settings.pg_dsn,
+                kwargs={"autocommit": True},
+                min_size=1,
+                max_size=3,
+                check=ConnectionPool.check_connection,  # revalida conexões antes de usar
+                open=True,
+            )
+            cp = PostgresSaver(pool)
+            cp.setup()
+            log.info("checkpointer: PostgresSaver ativo")
+            return cp
+        except Exception as e:  # pragma: no cover
+            log.warning("checkpointer: PostgresSaver indisponível (%s); usando MemorySaver", e)
+
+    return MemorySaver()
 
 
 @lru_cache(maxsize=1)
