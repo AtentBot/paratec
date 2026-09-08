@@ -20,7 +20,7 @@ import {
   UserPlus,
   WifiOff,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const statusMeta: Record<
   ConversaStatus,
@@ -48,9 +48,30 @@ export default function ConversasPage() {
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
   const [eu, setEu] = useState<{ name: string | null } | null>(null);
 
+  // Rolagem do histórico: `pinned` indica que o atendente está no fim da lista
+  // (para dar auto-scroll em mensagens novas sem "puxar" a tela enquanto ele lê
+  // o histórico). `prevThread` detecta troca de conversa para rolar ao abrir.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef(true);
+  const prevThreadRef = useRef<string | null>(null);
+
   useEffect(() => {
     api.whoami().then(setEu);
   }, []);
+
+  // Auto-scroll: ao abrir uma conversa (troca de thread) ou ao chegar mensagem
+  // nova estando no fim. Roda após o render, quando o DOM já tem as mensagens.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !ativa) return;
+    const trocou = prevThreadRef.current !== ativa.thread_id;
+    if (trocou || pinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+      pinnedRef.current = true;
+    }
+    prevThreadRef.current = ativa.thread_id;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ativa?.thread_id, ativa?.mensagens.length]);
 
   const carregarLista = useCallback(async () => {
     try {
@@ -78,6 +99,25 @@ export default function ConversasPage() {
     }
   }, []);
 
+  // Realtime: enquanto uma conversa está aberta, revalida a conversa ativa e a
+  // lista a cada 4s (o backend é REST, sem websocket) — reflete o que entra/sai
+  // pelo WhatsApp sem o atendente recarregar a página.
+  useEffect(() => {
+    const id = ativa?.thread_id;
+    if (!id) return;
+    const iv = setInterval(async () => {
+      try {
+        const d = await api.conversa(id);
+        setAtiva((cur) => (cur && cur.thread_id === id ? d : cur));
+        setOffline(false);
+      } catch {
+        // silencioso: falha de rede pontual não deve limpar a tela
+      }
+      carregarLista();
+    }, 4000);
+    return () => clearInterval(iv);
+  }, [ativa?.thread_id, carregarLista]);
+
   useEffect(() => {
     const t = setTimeout(() => {
       carregarLista().then((data) => {
@@ -104,6 +144,7 @@ export default function ConversasPage() {
     if (!t || !ativa || enviando) return;
     setEnviando(true);
     setErroEnvio(null);
+    pinnedRef.current = true; // ao enviar, rola para ver a própria mensagem
     try {
       if (modoNota) {
         setAtiva(await api.addNota(ativa.thread_id, t, eu?.name ?? undefined));
@@ -320,7 +361,15 @@ export default function ConversasPage() {
                 )}
               </div>
 
-              <div className="flex-1 space-y-3 overflow-y-auto bg-surface-2/40 p-5">
+              <div
+                ref={scrollRef}
+                onScroll={(e) => {
+                  const el = e.currentTarget;
+                  pinnedRef.current =
+                    el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+                }}
+                className="flex-1 space-y-3 overflow-y-auto bg-surface-2/40 p-5"
+              >
                 {ativa.mensagens.length === 0 ? (
                   <p className="py-8 text-center text-xs text-muted">
                     Sem mensagens nesta conversa.
