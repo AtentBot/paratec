@@ -4,8 +4,37 @@ import { OfflineNotice } from "@/components/offline-notice";
 import { WeeklyBars, SpecialistBars, ResolutionRing } from "@/components/charts";
 import { api, tryApi } from "@/lib/api";
 import { diaSemana, especialistaLabel, iniciais, relativo } from "@/lib/format";
-import { MessagesSquare, Headset, Package, Gauge, ArrowRight } from "lucide-react";
+import {
+  MessagesSquare,
+  Headset,
+  Package,
+  Gauge,
+  ArrowRight,
+  Users,
+  ClipboardList,
+  CircleCheck,
+  UserMinus,
+  Megaphone,
+  Inbox,
+} from "lucide-react";
 import Link from "next/link";
+import type { ReactNode } from "react";
+
+function Mini({ icon, label, value }: {
+  icon: ReactNode; label: string; value: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border bg-surface px-4 py-3 shadow-card">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted">
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <p className="tnum text-xl font-semibold text-ink">{value}</p>
+        <p className="truncate text-[11px] text-muted">{label}</p>
+      </div>
+    </div>
+  );
+}
 
 const CORES = ["var(--accent)", "var(--info)", "var(--success)", "var(--warning)"];
 
@@ -24,6 +53,13 @@ export default async function DashboardPage() {
     handoffs: 0,
     na_fila: 0,
     resolvidos_pct: 0,
+    abertas: 0,
+    resolvidas: 0,
+    clientes_total: 0,
+    clientes_ativos: 0,
+    opt_outs: 0,
+    orcamentos_abertos: 0,
+    campanhas: 0,
   };
   const semana = (metrics?.semana ?? []).map((d) => ({
     dia: diaSemana(d.dia),
@@ -71,6 +107,15 @@ export default async function DashboardPage() {
               : "catálogo indisponível"
           }
         />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+        <Mini icon={<Users size={16} />} label="Clientes ativos" value={totais.clientes_ativos} />
+        <Mini icon={<Inbox size={16} />} label="Em aberto" value={totais.abertas} />
+        <Mini icon={<CircleCheck size={16} />} label="Resolvidas" value={totais.resolvidas} />
+        <Mini icon={<ClipboardList size={16} />} label="Orçamentos abertos" value={totais.orcamentos_abertos} />
+        <Mini icon={<Megaphone size={16} />} label="Campanhas" value={totais.campanhas} />
+        <Mini icon={<UserMinus size={16} />} label="Opt-outs" value={totais.opt_outs} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

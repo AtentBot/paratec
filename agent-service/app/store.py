@@ -408,7 +408,15 @@ def metrics_overview() -> dict:
           (SELECT count(*) FROM conversations)                                AS conversas,
           (SELECT count(*) FROM events WHERE tipo = 'mensagem_recebida')      AS atendimentos,
           (SELECT count(*) FROM events WHERE tipo = 'handoff_humano')         AS handoffs,
-          (SELECT count(*) FROM queue_items WHERE status <> 'concluido')      AS na_fila
+          (SELECT count(*) FROM queue_items WHERE status <> 'concluido')      AS na_fila,
+          (SELECT count(*) FROM conversations WHERE status <> 'resolvida')    AS abertas,
+          (SELECT count(*) FROM conversations WHERE status = 'resolvida')     AS resolvidas,
+          (SELECT count(*) FROM customers)                                    AS clientes_total,
+          (SELECT count(*) FROM customers WHERE status = 'ativo')             AS clientes_ativos,
+          (SELECT count(*) FROM customers WHERE opt_out)                      AS opt_outs,
+          (SELECT count(*) FROM queue_items
+             WHERE tipo = 'pedido' AND status <> 'concluido')                 AS orcamentos_abertos,
+          (SELECT count(*) FROM broadcasts)                                   AS campanhas
         """
     )[0]
     atend = totais["atendimentos"] or 0

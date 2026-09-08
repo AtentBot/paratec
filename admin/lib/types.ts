@@ -127,5 +127,12 @@ export interface Metrics {
     handoffs: number;
     na_fila: number;
     resolvidos_pct: number;
+    abertas: number;
+    resolvidas: number;
+    clientes_total: number;
+    clientes_ativos: number;
+    opt_outs: number;
+    orcamentos_abertos: number;
+    campanhas: number;
   };
 }
