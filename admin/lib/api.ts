@@ -127,6 +127,12 @@ export const api = {
     send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/resolver`),
   reabrirConversa: (threadId: string) =>
     send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/reabrir`),
+  // Zera o contador de não-lidas ao abrir a conversa.
+  marcarLida: (threadId: string) =>
+    send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/ler`),
+  // URL do stream SSE (push em tempo real) desta conversa.
+  streamUrl: (threadId: string) =>
+    `${BASE}/conversas/${encodeURIComponent(threadId)}/stream`,
 
   // Orçamentos (comercial) = fila de pedidos
   orcamentos: (status?: string) =>

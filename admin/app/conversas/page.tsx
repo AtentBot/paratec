@@ -47,6 +47,8 @@ export default function ConversasPage() {
   const [enviando, setEnviando] = useState(false);
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
   const [eu, setEu] = useState<{ name: string | null } | null>(null);
+  // SSE conectado? Quando sim, o polling vira só rede de segurança (lento).
+  const [sseOn, setSseOn] = useState(false);
 
   // Rolagem do histórico: `pinned` indica que o atendente está no fim da lista
   // (para dar auto-scroll em mensagens novas sem "puxar" a tela enquanto ele lê
@@ -93,18 +95,56 @@ export default function ConversasPage() {
 
   const abrir = useCallback(async (threadId: string) => {
     try {
-      setAtiva(await api.conversa(threadId));
+      const c = await api.conversa(threadId);
+      setAtiva(c);
+      // ao abrir, marca como lida (zera não-lidas no banco e reflete na lista)
+      if (c.unread > 0) {
+        api.marcarLida(threadId).catch(() => {});
+        setLista((cur) =>
+          cur.map((x) => (x.thread_id === threadId ? { ...x, unread: 0 } : x)),
+        );
+      }
     } catch {
       setOffline(true);
     }
   }, []);
 
-  // Realtime: enquanto uma conversa está aberta, revalida a conversa ativa e a
-  // lista a cada 4s (o backend é REST, sem websocket) — reflete o que entra/sai
-  // pelo WhatsApp sem o atendente recarregar a página.
+  // Realtime (push): SSE por conversa — o backend emite um evento a cada
+  // mensagem gravada e a tela revalida na hora. Se o stream não conectar
+  // (proxy bufferizando), o polling abaixo cobre como rede de segurança.
+  useEffect(() => {
+    const id = ativa?.thread_id;
+    if (!id || typeof window === "undefined" || typeof EventSource === "undefined") return;
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource(api.streamUrl(id));
+    } catch {
+      return;
+    }
+    es.onopen = () => setSseOn(true);
+    es.onmessage = () => {
+      api
+        .conversa(id)
+        .then((d) => {
+          setAtiva((cur) => (cur && cur.thread_id === id ? d : cur));
+          setOffline(false);
+        })
+        .catch(() => {});
+      carregarLista();
+    };
+    es.onerror = () => setSseOn(false); // o EventSource tenta reconectar sozinho
+    return () => {
+      setSseOn(false);
+      es?.close();
+    };
+  }, [ativa?.thread_id, carregarLista]);
+
+  // Polling: rede de segurança. Com SSE conectado roda devagar (20s); sem SSE,
+  // volta a 4s para não regredir o tempo real.
   useEffect(() => {
     const id = ativa?.thread_id;
     if (!id) return;
+    const periodo = sseOn ? 20000 : 4000;
     const iv = setInterval(async () => {
       try {
         const d = await api.conversa(id);
@@ -114,9 +154,9 @@ export default function ConversasPage() {
         // silencioso: falha de rede pontual não deve limpar a tela
       }
       carregarLista();
-    }, 4000);
+    }, periodo);
     return () => clearInterval(iv);
-  }, [ativa?.thread_id, carregarLista]);
+  }, [ativa?.thread_id, carregarLista, sseOn]);
 
   useEffect(() => {
     const t = setTimeout(() => {

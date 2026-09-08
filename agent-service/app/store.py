@@ -268,6 +268,22 @@ def add_message(
         """,
         (content[:160], especialista, role, thread_id),
     )
+    # Notifica assinantes SSE (best-effort; nunca impede a gravação).
+    try:
+        from . import realtime
+
+        realtime.broker.publish(thread_id, {"type": "message", "role": role})
+    except Exception:  # pragma: no cover
+        pass
+
+
+def marcar_lida(thread_id: str) -> dict | None:
+    """Zera o contador de não-lidas (chamado quando o atendente abre a conversa)."""
+    execute(
+        "UPDATE conversations SET unread = 0 WHERE thread_id = %s",
+        (thread_id,),
+    )
+    return get_conversation(thread_id)
 
 
 def log_event(

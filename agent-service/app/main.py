@@ -1,20 +1,23 @@
 """API HTTP do serviço de agentes — chamada pelo N8N (fluxo do WhatsApp)
 e pela tela administrativa (endpoints /catalog, /conversas, /fila, /metrics)."""
+import asyncio
 import base64
 import csv
 import io
+import json
 import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Response, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import catalog, evolution, store
+from . import catalog, evolution, realtime, store
 from .agents import responder
 from .db import get_pool
 from .settings import settings
@@ -27,6 +30,8 @@ async def lifespan(_: FastAPI):
         store.ensure_schema()
     except Exception as e:  # pragma: no cover
         logging.getLogger("paratec").warning("ensure_schema falhou: %s", e)
+    # Permite publicar eventos SSE a partir de código síncrono (threadpool).
+    realtime.broker.bind_loop(asyncio.get_running_loop())
     yield
 
 
@@ -177,6 +182,48 @@ def bot(thread_id: str, req: BotRequest):
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
+
+
+@app.post("/conversas/{thread_id}/ler")
+def marcar_lida(thread_id: str):
+    """Zera o contador de não-lidas (quando o atendente abre a conversa)."""
+    c = store.marcar_lida(thread_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="conversa não encontrada")
+    return c
+
+
+@app.get("/conversas/{thread_id}/stream")
+async def stream(thread_id: str, request: Request):
+    """Push em tempo real (SSE): emite um evento sempre que uma mensagem é
+    gravada nesta conversa. O navegador, ao receber, revalida a conversa/lista.
+    Envia keep-alives periódicos e encerra quando o cliente desconecta."""
+
+    async def gen():
+        q = await realtime.broker.subscribe(thread_id)
+        try:
+            # abre o stream imediatamente (evita buffering do proxy no 1º byte)
+            yield ": ok\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(q.get(), timeout=20)
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"  # comentário SSE mantém a conexão viva
+        finally:
+            realtime.broker.unsubscribe(thread_id, q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # desliga buffering em proxies (nginx)
+        },
+    )
 
 
 @app.post("/conversas/{thread_id}/nota")
