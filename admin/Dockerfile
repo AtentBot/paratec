@@ -1,6 +1,7 @@
 # Tela administrativa Paratec (Next.js 14, saída standalone).
-# NEXT_PUBLIC_AGENT_API é embutida no build (o navegador do admin chama o
-# agent-service diretamente); ajuste via build-arg para o host de produção.
+# A API do agente é same-origin (o navegador chama /agent/*, o servidor Next faz
+# proxy p/ AGENT_INTERNAL_URL — ver next.config.mjs). NÃO embutir NEXT_PUBLIC_AGENT_API
+# (deixá-la vazia faz o navegador usar "/agent"); em dev local, defina-a no ambiente.
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
@@ -8,8 +9,6 @@ RUN npm ci
 
 FROM node:20-alpine AS build
 WORKDIR /app
-ARG NEXT_PUBLIC_AGENT_API=http://localhost:8000
-ENV NEXT_PUBLIC_AGENT_API=$NEXT_PUBLIC_AGENT_API
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
