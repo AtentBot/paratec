@@ -9,6 +9,7 @@ import {
   Users,
   ClipboardList,
   Megaphone,
+  FileBarChart,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -29,6 +30,7 @@ const NAV: NavItem[] = [
   { href: "/catalogo", label: "Catálogo", icon: Package },
   { href: "/fila", label: "Fila humana", icon: Headset },
   { href: "/promocoes", label: "Promoções", icon: Megaphone },
+  { href: "/relatorios", label: "Relatórios", icon: FileBarChart },
 ];
 
 export function Sidebar() {

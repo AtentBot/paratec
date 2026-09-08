@@ -10,6 +10,7 @@ import type {
   FilaItem,
   Metrics,
   Produto,
+  RelatorioResumo,
 } from "./types";
 
 // No NAVEGADOR: same-origin "/agent" (o Next faz proxy p/ o agent-service
@@ -67,6 +68,12 @@ export const api = {
     fetch("/whoami", { cache: "no-store" })
       .then((r) => r.json() as Promise<{ username: string | null; name: string | null }>)
       .catch(() => ({ username: null, name: null })),
+
+  // Relatórios (por período)
+  relatorioResumo: (desde: string, ate: string) =>
+    get<RelatorioResumo>(`/relatorios/resumo?desde=${desde}&ate=${ate}`),
+  relatorioConversasCsvUrl: (desde: string, ate: string) =>
+    `${BASE}/relatorios/conversas.csv?desde=${desde}&ate=${ate}`,
 
   // Métricas
   metrics: () => get<Metrics>("/metrics/overview"),

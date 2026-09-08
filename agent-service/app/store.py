@@ -147,6 +147,44 @@ def list_broadcasts(limit: int = 50) -> list[dict]:
     )
 
 
+# --- Relatórios (por período) --------------------------------------------
+
+def relatorio_resumo(desde: str, ate: str) -> dict:
+    """Agregados entre `desde` e `ate` (datas YYYY-MM-DD; `ate` inclusivo)."""
+    p = (desde, ate) * 7
+    return query(
+        """
+        SELECT
+          (SELECT count(DISTINCT thread_id) FROM events
+             WHERE tipo='mensagem_recebida' AND created_at >= %s AND created_at < (%s::date + 1)) AS atendimentos,
+          (SELECT count(*) FROM events
+             WHERE tipo='resolvida' AND created_at >= %s AND created_at < (%s::date + 1)) AS resolvidas,
+          (SELECT count(*) FROM events
+             WHERE tipo='handoff_humano' AND created_at >= %s AND created_at < (%s::date + 1)) AS handoffs,
+          (SELECT count(*) FROM customers
+             WHERE created_at >= %s AND created_at < (%s::date + 1)) AS novos_clientes,
+          (SELECT count(*) FROM queue_items
+             WHERE tipo='pedido' AND created_at >= %s AND created_at < (%s::date + 1)) AS orcamentos,
+          (SELECT count(*) FROM broadcasts
+             WHERE created_at >= %s AND created_at < (%s::date + 1)) AS campanhas,
+          (SELECT count(*) FROM events
+             WHERE tipo='opt_out' AND created_at >= %s AND created_at < (%s::date + 1)) AS opt_outs
+        """,
+        p,
+    )[0]
+
+
+def relatorio_conversas(desde: str, ate: str, limit: int = 100000) -> list[dict]:
+    return query(
+        """SELECT thread_id, cliente, telefone, status, especialista, responsavel,
+                  created_at, updated_at
+             FROM conversations
+            WHERE created_at >= %s AND created_at < (%s::date + 1)
+            ORDER BY created_at DESC LIMIT %s""",
+        (desde, ate, limit),
+    )
+
+
 # --- Escrita durante o atendimento ---------------------------------------
 
 def upsert_conversation(

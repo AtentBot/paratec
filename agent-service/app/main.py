@@ -251,6 +251,21 @@ def fila_csv(tipo: str | None = None, status: str | None = None):
     return _csv("fila.csv", cols, store.list_queue(tipo, status))
 
 
+# --- Relatórios (por período) ----------------------------------------------
+
+@app.get("/relatorios/resumo")
+def relatorios_resumo(desde: str, ate: str):
+    return store.relatorio_resumo(desde, ate)
+
+
+@app.get("/relatorios/conversas.csv")
+def relatorios_conversas_csv(desde: str, ate: str):
+    cols = ["thread_id", "cliente", "telefone", "status", "especialista",
+            "responsavel", "created_at", "updated_at"]
+    return _csv(f"relatorio-conversas-{desde}_a_{ate}.csv", cols,
+                store.relatorio_conversas(desde, ate))
+
+
 # --- Orçamentos (comercial) — pedidos de orçamento gerados pelo agente ------
 
 @app.get("/orcamentos")

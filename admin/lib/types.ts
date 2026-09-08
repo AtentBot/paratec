@@ -50,6 +50,16 @@ export interface Cliente {
   updated_at: string;
 }
 
+export interface RelatorioResumo {
+  atendimentos: number;
+  resolvidas: number;
+  handoffs: number;
+  novos_clientes: number;
+  orcamentos: number;
+  campanhas: number;
+  opt_outs: number;
+}
+
 export type BroadcastStatus = "enviando" | "concluido" | "erro";
 
 export interface Broadcast {
