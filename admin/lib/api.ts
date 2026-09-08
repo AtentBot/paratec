@@ -92,6 +92,11 @@ export const api = {
     }),
   assumirConversa: (threadId: string) =>
     send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/assumir`),
+  // Liga/desliga a resposta automática da IA nesta conversa.
+  setBot: (threadId: string, ativo: boolean) =>
+    send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/bot`, {
+      ativo,
+    }),
   resolverConversa: (threadId: string) =>
     send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/resolver`),
   reabrirConversa: (threadId: string) =>

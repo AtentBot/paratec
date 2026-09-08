@@ -7,9 +7,9 @@ import { cn } from "@/lib/cn";
 import { especialistaLabel, hora, iniciais, relativo } from "@/lib/format";
 import type { ConversaDetalhe, ConversaResumo, ConversaStatus } from "@/lib/types";
 import {
+  Bot,
   CheckCheck,
   CircleCheck,
-  Headset,
   Inbox,
   Phone,
   RotateCcw,
@@ -262,9 +262,47 @@ export default function ConversasPage() {
                     {especialistaLabel[ativa.especialista] ?? ativa.especialista}
                   </Badge>
                 )}
-                <Badge tone={statusMeta[ativa.status].tone} dot>
-                  {statusMeta[ativa.status].label}
-                </Badge>
+                {ativa.status === "resolvida" ? (
+                  <Badge tone={statusMeta.resolvida.tone} dot>
+                    {statusMeta.resolvida.label}
+                  </Badge>
+                ) : (
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={ativa.status === "ia"}
+                    onClick={() =>
+                      acao(() => api.setBot(ativa.thread_id, ativa.status !== "ia"))
+                    }
+                    title={
+                      ativa.status === "ia"
+                        ? "IA respondendo automaticamente. Clique para pausar e assumir o atendimento."
+                        : "Atendimento humano (IA pausada). Clique para devolver o atendimento à IA."
+                    }
+                    className={cn(
+                      "inline-flex items-center gap-2 rounded-full border px-2.5 py-1.5 text-xs font-medium transition",
+                      ativa.status === "ia"
+                        ? "border-accent/40 bg-accent-soft text-accent-ink"
+                        : "border-warning/50 bg-warning/10 text-warning",
+                    )}
+                  >
+                    <Bot size={14} />
+                    {ativa.status === "ia" ? "IA ativa" : "IA pausada"}
+                    <span
+                      className={cn(
+                        "relative h-4 w-7 rounded-full transition-colors",
+                        ativa.status === "ia" ? "bg-accent" : "bg-warning/60",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-all",
+                          ativa.status === "ia" ? "left-3.5" : "left-0.5",
+                        )}
+                      />
+                    </span>
+                  </button>
+                )}
                 {ativa.status === "resolvida" ? (
                   <button
                     onClick={() => acao(() => api.reabrirConversa(ativa.thread_id))}
@@ -331,14 +369,6 @@ export default function ConversasPage() {
               </div>
 
               <div className="flex items-center gap-2 border-t p-3">
-                {ativa.status !== "humano" && (
-                  <button
-                    onClick={() => acao(() => api.assumirConversa(ativa.thread_id))}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-feature px-3 py-2 text-xs font-medium text-feature-fg transition hover:opacity-90"
-                  >
-                    <Headset size={14} /> Assumir
-                  </button>
-                )}
                 <button
                   onClick={() => setModoNota((v) => !v)}
                   title={modoNota ? "Modo: nota interna" : "Modo: responder cliente"}

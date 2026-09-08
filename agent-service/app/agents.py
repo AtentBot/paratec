@@ -209,6 +209,21 @@ def responder(
     except Exception as e:  # pragma: no cover
         log.warning("persistência (entrada) falhou: %s", e)
 
+    # IA pausada: conversa sob controle humano (ou já resolvida) NÃO recebe
+    # resposta automática. A mensagem do cliente já foi persistida acima e
+    # aparece no painel; devolve vazio para o n8n não enviar nada ao WhatsApp.
+    try:
+        status_atual = store.get_status(thread_id)
+    except Exception as e:  # pragma: no cover
+        log.warning("leitura de status falhou: %s", e)
+        status_atual = None
+    if status_atual in ("humano", "resolvida"):
+        try:
+            store.log_event("ia_pausada", thread_id=thread_id)
+        except Exception:  # pragma: no cover
+            pass
+        return ""
+
     result = get_app().invoke(
         {"messages": [{"role": "user", "content": mensagem}]},
         config={"configurable": {"thread_id": thread_id}},

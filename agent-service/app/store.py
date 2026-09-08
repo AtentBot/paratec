@@ -212,6 +212,37 @@ def set_status(thread_id: str, status: str) -> None:
     )
 
 
+def get_status(thread_id: str) -> str | None:
+    """Status atual da conversa (ia | humano | resolvida) ou None se não existe.
+    Usado pelo /chat para decidir se a IA deve responder automaticamente."""
+    rows = query("SELECT status FROM conversations WHERE thread_id = %s", (thread_id,))
+    return rows[0]["status"] if rows else None
+
+
+def set_bot(thread_id: str, ativo: bool) -> dict | None:
+    """Liga/desliga a resposta automática da IA nesta conversa.
+
+    ativo=True  -> status 'ia'     (IA responde automaticamente às mensagens);
+    ativo=False -> status 'humano' (atendimento humano; IA pausada).
+
+    É o toggle da tela de conversas. Enquanto 'humano'/'resolvida', o /chat
+    não aciona o LLM (ver agents.responder)."""
+    if ativo:
+        execute(
+            "UPDATE conversations SET status = 'ia', updated_at = now() WHERE thread_id = %s",
+            (thread_id,),
+        )
+        log_event("retomou_ia", thread_id=thread_id, meta={"origem": "manual"})
+    else:
+        execute(
+            """UPDATE conversations SET status = 'humano', unread = 0, updated_at = now()
+                 WHERE thread_id = %s""",
+            (thread_id,),
+        )
+        log_event("handoff_humano", thread_id=thread_id, meta={"origem": "manual"})
+    return get_conversation(thread_id)
+
+
 def add_queue_item(
     tipo: str,
     resumo: str,

@@ -42,6 +42,16 @@
     },
     {
       "parameters": {
+        "jsCode": "// A IA pode devolver resposta vazia quando o atendimento está sob controle\n// humano (toggle 'IA pausada' na tela de conversas). Nesse caso, não envia\n// nada ao WhatsApp — o atendente responde manualmente pelo painel.\nconst r = ($json.resposta ?? '').trim();\nif (!r) { return []; }\nreturn [{ json: { resposta: r } }];"
+      },
+      "id": "filtrar-vazio",
+      "name": "Filtrar vazio (IA pausada)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "=http://evolution-api:8080/message/sendText/{{ $('Extrair mensagem').item.json.instance }}",
         "sendHeaders": true,
@@ -70,6 +80,9 @@
       "main": [[{ "node": "Chamar agente (/chat)", "type": "main", "index": 0 }]]
     },
     "Chamar agente (/chat)": {
+      "main": [[{ "node": "Filtrar vazio (IA pausada)", "type": "main", "index": 0 }]]
+    },
+    "Filtrar vazio (IA pausada)": {
       "main": [[{ "node": "Responder (sendText)", "type": "main", "index": 0 }]]
     }
   },

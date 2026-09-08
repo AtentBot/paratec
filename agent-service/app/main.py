@@ -73,6 +73,10 @@ class AtribuirRequest(BaseModel):
     responsavel: str | None = None
 
 
+class BotRequest(BaseModel):
+    ativo: bool
+
+
 @app.get("/health")
 def health():
     try:
@@ -129,6 +133,16 @@ def resolver(thread_id: str):
 @app.post("/conversas/{thread_id}/reabrir")
 def reabrir(thread_id: str):
     c = store.reabrir_conversation(thread_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="conversa não encontrada")
+    return c
+
+
+@app.post("/conversas/{thread_id}/bot")
+def bot(thread_id: str, req: BotRequest):
+    """Liga/desliga a resposta automática da IA nesta conversa (toggle do painel).
+    ativo=false pausa a IA (atendimento humano); ativo=true devolve à IA."""
+    c = store.set_bot(thread_id, req.ativo)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
