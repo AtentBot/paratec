@@ -11,9 +11,16 @@ import type {
   Produto,
 } from "./types";
 
+// No NAVEGADOR: same-origin "/agent" (o Next faz proxy p/ o agent-service
+// interno — ver next.config.mjs). No SERVIDOR (SSR): URL interna absoluta,
+// pois fetch relativo não funciona no server. Dev local: defina
+// NEXT_PUBLIC_AGENT_API=http://localhost:8000 (vale nos dois lados).
+const isServer = typeof window === "undefined";
 const BASE =
   process.env.NEXT_PUBLIC_AGENT_API?.replace(/\/$/, "") ||
-  "http://localhost:8000";
+  (isServer
+    ? process.env.AGENT_INTERNAL_URL || "http://paratec-agent:8000"
+    : "/agent");
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
