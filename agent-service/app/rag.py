@@ -104,10 +104,10 @@ def _chunks_catalogo() -> list[dict]:
 
 
 def ingest_catalogo() -> dict:
-    """(Re)constrói a base a partir do catálogo. Recria a tabela (garante a
-    dimensão atual do embedding) e repopula."""
-    with _pool().connection() as conn:
-        conn.execute("DROP TABLE IF EXISTS knowledge_chunks")
+    """(Re)constrói a base do catálogo. Reescreve APENAS a fonte 'catalogo'
+    (via DELETE ... WHERE source='catalogo' abaixo), preservando documentos
+    enviados manualmente (ex.: FAQ técnica, normas). NÃO derruba a tabela —
+    isso apagaria as demais fontes do RAG."""
     ensure_schema()
     chunks = _chunks_catalogo()
     emb = _embeddings()
