@@ -12,7 +12,7 @@ from functools import lru_cache
 from .settings import settings
 
 log = logging.getLogger("paratec.rag")
-DIM = 768
+DIM = 3072  # gemini-embedding-001
 
 
 @lru_cache(maxsize=1)
@@ -56,10 +56,8 @@ def ensure_schema() -> None:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )"""
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_kc_embedding ON knowledge_chunks "
-            "USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
-        )
+        # 3072 dims excede o limite do índice ivfflat/hnsw (2000); a base é
+        # pequena, então usamos busca exata (sequential scan) — rápida o bastante.
 
 
 def status() -> dict:
@@ -104,7 +102,10 @@ def _chunks_catalogo() -> list[dict]:
 
 
 def ingest_catalogo() -> dict:
-    """(Re)constrói a base a partir do catálogo. Idempotente (substitui a fonte)."""
+    """(Re)constrói a base a partir do catálogo. Recria a tabela (garante a
+    dimensão atual do embedding) e repopula."""
+    with _pool().connection() as conn:
+        conn.execute("DROP TABLE IF EXISTS knowledge_chunks")
     ensure_schema()
     chunks = _chunks_catalogo()
     emb = _embeddings()

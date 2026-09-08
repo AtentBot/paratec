@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     vector_db: str = "rag"
     vector_user: str = "postgres"
     vector_password: str = ""
-    embedding_model: str = "models/text-embedding-004"  # 768 dims
+    embedding_model: str = "models/gemini-embedding-001"  # 3072 dims
 
     @property
     def rag_enabled(self) -> bool:
