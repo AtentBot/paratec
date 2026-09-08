@@ -41,9 +41,11 @@ class Settings(BaseSettings):
 
     @property
     def pg_dsn(self) -> str:
+        # keepalives TCP evitam que a rede overlay do Swarm derrube conexões ociosas.
         return (
             f"host={self.pghost} port={self.pgport} dbname={self.pgdatabase} "
-            f"user={self.pguser} password={self.pgpassword}"
+            f"user={self.pguser} password={self.pgpassword} "
+            f"keepalives=1 keepalives_idle=30 keepalives_interval=10 keepalives_count=5"
         )
 
 

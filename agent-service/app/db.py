@@ -15,6 +15,11 @@ def get_pool() -> ConnectionPool:
             min_size=1,
             max_size=5,
             kwargs={"row_factory": dict_row},
+            # Revalida a conexão ao pegá-la do pool e recicla conexões ociosas:
+            # a rede overlay do Swarm derruba conexões TCP paradas, causando
+            # "server closed the connection unexpectedly".
+            check=ConnectionPool.check_connection,
+            max_idle=60.0,
             open=True,
         )
     return _pool
