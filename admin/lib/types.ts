@@ -45,8 +45,22 @@ export interface Cliente {
   email: string | null;
   nome_contato: string | null;
   status: ClienteStatus;
+  opt_out?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export type BroadcastStatus = "enviando" | "concluido" | "erro";
+
+export interface Broadcast {
+  id: number;
+  texto: string;
+  total: number;
+  enviados: number;
+  falhas: number;
+  status: BroadcastStatus;
+  criado_por: string | null;
+  created_at: string;
 }
 
 // --- Conversas ------------------------------------------------------------

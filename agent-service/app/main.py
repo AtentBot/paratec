@@ -3,9 +3,10 @@ e pela tela administrativa (endpoints /catalog, /conversas, /fila, /metrics)."""
 import csv
 import io
 import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -58,6 +59,11 @@ class ResponderRequest(BaseModel):
     texto: str
 
 
+class BroadcastRequest(BaseModel):
+    texto: str
+    criado_por: str | None = None
+
+
 @app.get("/health")
 def health():
     try:
@@ -94,6 +100,22 @@ def conversa(thread_id: str):
 @app.post("/conversas/{thread_id}/assumir")
 def assumir(thread_id: str):
     c = store.assumir_conversation(thread_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="conversa não encontrada")
+    return c
+
+
+@app.post("/conversas/{thread_id}/resolver")
+def resolver(thread_id: str):
+    c = store.resolver_conversation(thread_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="conversa não encontrada")
+    return c
+
+
+@app.post("/conversas/{thread_id}/reabrir")
+def reabrir(thread_id: str):
+    c = store.reabrir_conversation(thread_id)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
@@ -181,6 +203,49 @@ def fila_csv(tipo: str | None = None, status: str | None = None):
     cols = ["id", "tipo", "status", "cliente", "telefone", "resumo",
             "responsavel", "created_at"]
     return _csv("fila.csv", cols, store.list_queue(tipo, status))
+
+
+# --- Orçamentos (comercial) — pedidos de orçamento gerados pelo agente ------
+
+@app.get("/orcamentos")
+def orcamentos(status: str | None = None):
+    return store.list_queue("pedido", status)
+
+
+# --- Broadcast (envio em massa de promoções) --------------------------------
+
+def _run_broadcast(bid: int, texto: str, dests: list[dict]) -> None:
+    """Worker: envia a todos com throttle (anti-bloqueio). Roda em background."""
+    for c in dests:
+        try:
+            evolution.enviar_texto(c["telefone"], texto)
+            store.bump_broadcast(bid, enviados=1)
+        except Exception as e:  # pragma: no cover
+            logging.getLogger("paratec").warning("broadcast %s falhou p/ %s: %s",
+                                                  bid, c.get("telefone"), e)
+            store.bump_broadcast(bid, falhas=1)
+        time.sleep(settings.broadcast_throttle_seconds)
+    store.finish_broadcast(bid, "concluido")
+
+
+@app.post("/broadcast")
+def broadcast(req: BroadcastRequest, bg: BackgroundTasks):
+    texto = req.texto.strip()
+    if not texto:
+        raise HTTPException(status_code=422, detail="texto vazio")
+    if not settings.evolution_configured:
+        raise HTTPException(status_code=503, detail="Evolution API não configurada")
+    dests = store.customers_para_broadcast()
+    if not dests:
+        raise HTTPException(status_code=422, detail="nenhum cliente elegível (ativo/sem opt-out)")
+    bid = store.create_broadcast(texto, len(dests), req.criado_por)
+    bg.add_task(_run_broadcast, bid, texto, dests)
+    return {"id": bid, "total": len(dests), "status": "enviando"}
+
+
+@app.get("/broadcasts")
+def broadcasts():
+    return store.list_broadcasts()
 
 
 # --- Catálogo (consumido pela tela administrativa) -------------------------

@@ -1,6 +1,7 @@
 // Cliente do agent-service (FastAPI). Todas as seções agora consomem dados
 // reais; não há mais fixtures. Falhas de rede são tratadas por `tryApi`.
 import type {
+  Broadcast,
   CatalogStats,
   Categoria,
   Cliente,
@@ -71,6 +72,22 @@ export const api = {
     get<ConversaDetalhe>(`/conversas/${encodeURIComponent(threadId)}`),
   assumirConversa: (threadId: string) =>
     send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/assumir`),
+  resolverConversa: (threadId: string) =>
+    send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/resolver`),
+  reabrirConversa: (threadId: string) =>
+    send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/reabrir`),
+
+  // Orçamentos (comercial) = fila de pedidos
+  orcamentos: (status?: string) =>
+    get<FilaItem[]>(`/orcamentos${status ? `?status=${status}` : ""}`),
+
+  // Broadcast / promoções
+  broadcasts: () => get<Broadcast[]>("/broadcasts"),
+  enviarBroadcast: (texto: string, criado_por?: string) =>
+    send<{ id: number; total: number; status: string }>("POST", "/broadcast", {
+      texto,
+      criado_por,
+    }),
   responderConversa: (threadId: string, texto: string) =>
     send<ConversaDetalhe>(
       "POST",

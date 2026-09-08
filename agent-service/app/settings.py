@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     evolution_api_key: str = ""
     evolution_instance: str = "paratec"
 
+    # Intervalo entre envios no broadcast (anti-bloqueio do WhatsApp).
+    broadcast_throttle_seconds: float = 4.0
+
     @property
     def evolution_configured(self) -> bool:
         return bool(self.evolution_api_url and self.evolution_api_key)

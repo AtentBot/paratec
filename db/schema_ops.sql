@@ -28,6 +28,26 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE INDEX IF NOT EXISTS idx_customers_status ON customers(status);
 CREATE INDEX IF NOT EXISTS idx_customers_cnpj   ON customers(cnpj);
 
+-- opt-out de promoções/broadcast (cliente pediu para não receber)
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS opt_out BOOLEAN NOT NULL DEFAULT false;
+
+-- ---------------------------------------------------------------------------
+-- Broadcasts (campanhas de mensagem/promoção em massa)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS broadcasts (
+    id            BIGSERIAL PRIMARY KEY,
+    texto         TEXT NOT NULL,
+    total         INTEGER NOT NULL DEFAULT 0,   -- destinatários alvo
+    enviados      INTEGER NOT NULL DEFAULT 0,
+    falhas        INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'enviando'
+                    CHECK (status IN ('enviando', 'concluido', 'erro')),
+    criado_por    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_broadcasts_created ON broadcasts(created_at DESC);
+
 -- ---------------------------------------------------------------------------
 -- Conversas (1 por thread; thread_id = número do WhatsApp)
 -- ---------------------------------------------------------------------------

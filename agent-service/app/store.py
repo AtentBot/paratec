@@ -43,7 +43,7 @@ CAMPOS_CADASTRO = ("razao_social", "cnpj", "email", "nome_contato")
 def get_customer(telefone: str) -> dict | None:
     rows = query(
         """SELECT telefone, razao_social, cnpj, email, nome_contato,
-                  status, created_at, updated_at
+                  status, opt_out, created_at, updated_at
              FROM customers WHERE telefone = %s""",
         (telefone,),
     )
@@ -92,10 +92,58 @@ def list_customers(status: str | None = None, limit: int = 200) -> list[dict]:
     params: tuple = (status, limit) if status else (limit,)
     return query(
         f"""SELECT telefone, razao_social, cnpj, email, nome_contato,
-                   status, created_at, updated_at
+                   status, opt_out, created_at, updated_at
               FROM customers {where}
              ORDER BY created_at DESC LIMIT %s""",
         params,
+    )
+
+
+def set_opt_out(telefone: str, value: bool = True) -> None:
+    execute(
+        "UPDATE customers SET opt_out = %s, updated_at = now() WHERE telefone = %s",
+        (value, telefone),
+    )
+
+
+# --- Broadcast (envio em massa) ------------------------------------------
+
+def customers_para_broadcast() -> list[dict]:
+    """Clientes ATIVOS que não pediram opt-out (destinatários de campanha)."""
+    return query(
+        """SELECT telefone, razao_social, nome_contato FROM customers
+            WHERE status = 'ativo' AND opt_out = false AND telefone IS NOT NULL"""
+    )
+
+
+def create_broadcast(texto: str, total: int, criado_por: str | None = None) -> int:
+    return execute(
+        """INSERT INTO broadcasts (texto, total, criado_por) VALUES (%s, %s, %s)
+           RETURNING id""",
+        (texto, total, criado_por), returning=True,
+    )[0]["id"]
+
+
+def bump_broadcast(bid: int, enviados: int = 0, falhas: int = 0) -> None:
+    execute(
+        """UPDATE broadcasts SET enviados = enviados + %s, falhas = falhas + %s,
+               updated_at = now() WHERE id = %s""",
+        (enviados, falhas, bid),
+    )
+
+
+def finish_broadcast(bid: int, status: str = "concluido") -> None:
+    execute(
+        "UPDATE broadcasts SET status = %s, updated_at = now() WHERE id = %s",
+        (status, bid),
+    )
+
+
+def list_broadcasts(limit: int = 50) -> list[dict]:
+    return query(
+        """SELECT id, texto, total, enviados, falhas, status, criado_por, created_at
+             FROM broadcasts ORDER BY created_at DESC LIMIT %s""",
+        (limit,),
     )
 
 
@@ -227,6 +275,24 @@ def assumir_conversation(thread_id: str) -> dict | None:
         (thread_id,),
     )
     log_event("handoff_humano", thread_id=thread_id, meta={"origem": "manual"})
+    return get_conversation(thread_id)
+
+
+def resolver_conversation(thread_id: str) -> dict | None:
+    execute(
+        """UPDATE conversations SET status = 'resolvida', unread = 0, updated_at = now()
+             WHERE thread_id = %s""",
+        (thread_id,),
+    )
+    log_event("resolvida", thread_id=thread_id, meta={"origem": "manual"})
+    return get_conversation(thread_id)
+
+
+def reabrir_conversation(thread_id: str) -> dict | None:
+    execute(
+        "UPDATE conversations SET status = 'humano', updated_at = now() WHERE thread_id = %s",
+        (thread_id,),
+    )
     return get_conversation(thread_id)
 
 

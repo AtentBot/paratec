@@ -25,6 +25,10 @@ from .tools import (
 
 log = logging.getLogger("paratec.agents")
 
+# Palavras que sinalizam opt-out de promoções (descadastro do broadcast).
+OPT_OUT_PALAVRAS = {"sair", "parar", "pare", "cancelar", "stop", "descadastrar",
+                    "remover", "sair da lista", "não quero", "nao quero"}
+
 # Todas as ferramentas em um só agente.
 ALL_TOOLS = CADASTRO_TOOLS + CATALOG_TOOLS + PEDIDOS_TOOLS + ENTREGA_TOOLS + BOLETOS_TOOLS
 
@@ -183,6 +187,21 @@ def responder(
     `thread_id` mantém o histórico (ex: número do WhatsApp). A persistência é
     best-effort: uma falha de banco nunca impede a resposta ao cliente.
     """
+    # Opt-out de promoções por palavra-chave (não aciona o agente/LLM).
+    if mensagem.strip().lower() in OPT_OUT_PALAVRAS:
+        try:
+            store.upsert_conversation(thread_id, cliente, telefone)
+            store.add_message(thread_id, "cliente", mensagem)
+            store.set_opt_out(thread_id, True)
+            resp = ("Pronto! Você não receberá mais nossas promoções por aqui. "
+                    "Se precisar de atendimento, é só mandar uma mensagem. 👍")
+            store.add_message(thread_id, "agente", resp)
+            store.log_event("opt_out", thread_id=thread_id)
+        except Exception as e:  # pragma: no cover
+            log.warning("opt-out falhou: %s", e)
+            resp = "Pronto! Você não receberá mais nossas promoções."
+        return resp
+
     try:
         store.upsert_conversation(thread_id, cliente, telefone)
         store.add_message(thread_id, "cliente", mensagem)

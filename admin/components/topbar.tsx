@@ -7,8 +7,10 @@ import { ThemeToggle } from "./theme-toggle";
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   "/": { title: "Dashboard", sub: "Visão geral do atendimento" },
-  "/conversas": { title: "Conversas", sub: "Atendimentos no WhatsApp" },
+  "/conversas": { title: "Atendimento", sub: "Conversas no WhatsApp — aberto e resolvido" },
   "/clientes": { title: "Clientes", sub: "Cadastros via WhatsApp" },
+  "/orcamentos": { title: "Orçamentos", sub: "Pedidos de orçamento para o comercial" },
+  "/promocoes": { title: "Promoções", sub: "Envio de mensagens em massa" },
   "/catalogo": { title: "Catálogo", sub: "Produtos, variantes e categorias" },
   "/fila": { title: "Fila humana", sub: "Pedidos, entregas e boletos" },
 };

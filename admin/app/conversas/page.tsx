@@ -12,9 +12,11 @@ import type {
 } from "@/lib/types";
 import {
   CheckCheck,
+  CircleCheck,
   Headset,
   Inbox,
   Phone,
+  RotateCcw,
   Send,
   WifiOff,
 } from "lucide-react";
@@ -79,6 +81,26 @@ export default function ConversasPage() {
     if (!ativa) return;
     try {
       setAtiva(await api.assumirConversa(ativa.thread_id));
+      carregarLista();
+    } catch {
+      setOffline(true);
+    }
+  }
+
+  async function resolver() {
+    if (!ativa) return;
+    try {
+      setAtiva(await api.resolverConversa(ativa.thread_id));
+      carregarLista();
+    } catch {
+      setOffline(true);
+    }
+  }
+
+  async function reabrir() {
+    if (!ativa) return;
+    try {
+      setAtiva(await api.reabrirConversa(ativa.thread_id));
       carregarLista();
     } catch {
       setOffline(true);
@@ -219,6 +241,21 @@ export default function ConversasPage() {
                 <Badge tone={statusMeta[ativa.status].tone} dot>
                   {statusMeta[ativa.status].label}
                 </Badge>
+                {ativa.status === "resolvida" ? (
+                  <button
+                    onClick={reabrir}
+                    className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium text-ink transition hover:bg-surface-2"
+                  >
+                    <RotateCcw size={13} /> Reabrir
+                  </button>
+                ) : (
+                  <button
+                    onClick={resolver}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-success/10 px-2.5 py-1.5 text-xs font-medium text-success transition hover:bg-success/20"
+                  >
+                    <CircleCheck size={13} /> Resolver
+                  </button>
+                )}
               </div>
 
               <div className="flex-1 space-y-3 overflow-y-auto bg-surface-2/40 p-5">
