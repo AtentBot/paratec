@@ -50,6 +50,19 @@ export interface Cliente {
   updated_at: string;
 }
 
+export interface RagStatus {
+  enabled: boolean;
+  chunks?: number;
+  fontes?: number;
+  erro?: string;
+}
+
+export interface RagFonte {
+  source: string;
+  chunks: number;
+  atualizado: string;
+}
+
 export interface RelatorioResumo {
   atendimentos: number;
   resolvidas: number;
@@ -70,6 +83,7 @@ export interface Broadcast {
   falhas: number;
   status: BroadcastStatus;
   criado_por: string | null;
+  imagem: string | null; // caminho relativo /media/<arquivo> ou null
   created_at: string;
 }
 

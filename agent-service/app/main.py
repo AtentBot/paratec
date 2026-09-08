@@ -1,13 +1,17 @@
 """API HTTP do serviço de agentes — chamada pelo N8N (fluxo do WhatsApp)
 e pela tela administrativa (endpoints /catalog, /conversas, /fila, /metrics)."""
+import base64
 import csv
 import io
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import catalog, evolution, store
@@ -27,6 +31,27 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Paratec Agent Service", version="0.1.0", lifespan=lifespan)
+
+# Diretório dos banners/imagens de promoções (montado em /media). Persistir com
+# um volume Docker em `/app/media` para o histórico manter as miniaturas.
+MEDIA_DIR = Path(settings.media_dir) if settings.media_dir else Path(__file__).resolve().parents[1] / "media"
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+
+# Tipos de imagem aceitos no upload de banner.
+_IMAGE_MIMES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
+
+def _media_file(nome: str) -> Path:
+    """Resolve um arquivo dentro de MEDIA_DIR barrando path traversal."""
+    p = (MEDIA_DIR / Path(nome).name).resolve()
+    if p.parent != MEDIA_DIR.resolve():
+        raise HTTPException(status_code=400, detail="caminho de mídia inválido")
+    return p
 
 # A tela adm (Next.js) roda em outra origem; libera CORS para o painel.
 app.add_middleware(
@@ -63,6 +88,11 @@ class BroadcastRequest(BaseModel):
     texto: str
     segmento: str = "todos"
     criado_por: str | None = None
+    # Banner opcional (caminho relativo /media/<arquivo> devolvido pelo upload).
+    imagem: str | None = None
+    # Destinatários escolhidos manualmente na tela. Quando presente (não vazio),
+    # tem prioridade sobre `segmento`.
+    telefones: list[str] | None = None
 
 
 class NotaRequest(BaseModel):
@@ -287,6 +317,36 @@ def rag_ingest():
         raise HTTPException(status_code=500, detail=f"falha no ingest: {e}")
 
 
+@app.post("/rag/upload")
+async def rag_upload(file: UploadFile = File(...)):
+    """Ingere um documento (PDF/txt/md) na base de conhecimento."""
+    from . import rag
+    if not settings.rag_enabled:
+        raise HTTPException(status_code=503, detail="RAG não configurado (VECTOR_HOST)")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="arquivo vazio")
+    try:
+        return rag.ingest_documento(file.filename or "documento", data, file.content_type)
+    except Exception as e:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=f"falha no upload: {e}")
+
+
+@app.get("/rag/fontes")
+def rag_fontes():
+    from . import rag
+    if not settings.rag_enabled:
+        return []
+    return rag.listar_fontes()
+
+
+@app.delete("/rag/fontes/{source}")
+def rag_remover_fonte(source: str):
+    from . import rag
+    removidos = rag.remover_fonte(source)
+    return {"fonte": source, "removidos": removidos}
+
+
 # --- Orçamentos (comercial) — pedidos de orçamento gerados pelo agente ------
 
 @app.get("/orcamentos")
@@ -296,11 +356,23 @@ def orcamentos(status: str | None = None):
 
 # --- Broadcast (envio em massa de promoções) --------------------------------
 
-def _run_broadcast(bid: int, texto: str, dests: list[dict]) -> None:
-    """Worker: envia a todos com throttle (anti-bloqueio). Roda em background."""
+def _run_broadcast(
+    bid: int, texto: str, dests: list[dict], midia: dict | None = None
+) -> None:
+    """Worker: envia a todos com throttle (anti-bloqueio). Roda em background.
+
+    `midia` (opcional) = {"b64", "mimetype", "filename"} para enviar um banner
+    (imagem) com `texto` como legenda; sem ela, envia só texto.
+    """
     for c in dests:
         try:
-            evolution.enviar_texto(c["telefone"], texto)
+            if midia:
+                evolution.enviar_midia(
+                    c["telefone"], midia["b64"],
+                    mimetype=midia["mimetype"], filename=midia["filename"], caption=texto,
+                )
+            else:
+                evolution.enviar_texto(c["telefone"], texto)
             store.bump_broadcast(bid, enviados=1)
         except Exception as e:  # pragma: no cover
             logging.getLogger("paratec").warning("broadcast %s falhou p/ %s: %s",
@@ -310,18 +382,59 @@ def _run_broadcast(bid: int, texto: str, dests: list[dict]) -> None:
     store.finish_broadcast(bid, "concluido")
 
 
+@app.post("/broadcast/upload")
+async def broadcast_upload(file: UploadFile = File(...)):
+    """Recebe a imagem do banner e a guarda em /media. Devolve o caminho relativo."""
+    mime = (file.content_type or "").lower()
+    if mime not in _IMAGE_MIMES:
+        raise HTTPException(status_code=422, detail="use uma imagem JPG, PNG ou WEBP")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="arquivo vazio")
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="imagem acima de 5 MB")
+    nome = f"promo-{uuid.uuid4().hex}{_IMAGE_MIMES[mime]}"
+    _media_file(nome).write_bytes(data)
+    return {"arquivo": nome, "url": f"/media/{nome}", "mimetype": mime}
+
+
 @app.post("/broadcast")
 def broadcast(req: BroadcastRequest, bg: BackgroundTasks):
     texto = req.texto.strip()
-    if not texto:
-        raise HTTPException(status_code=422, detail="texto vazio")
+    if not texto and not req.imagem:
+        raise HTTPException(status_code=422, detail="informe um texto ou uma imagem")
     if not settings.evolution_configured:
         raise HTTPException(status_code=503, detail="Evolution API não configurada")
-    dests = store.customers_para_broadcast(req.segmento)
-    if not dests:
-        raise HTTPException(status_code=422, detail="nenhum cliente elegível neste segmento")
-    bid = store.create_broadcast(texto, len(dests), req.criado_por)
-    bg.add_task(_run_broadcast, bid, texto, dests)
+
+    # Destinatários: seleção manual tem prioridade sobre o segmento.
+    if req.telefones:
+        dests = store.customers_por_telefones(req.telefones)
+        if not dests:
+            raise HTTPException(status_code=422, detail="nenhum cliente elegível selecionado")
+    else:
+        dests = store.customers_para_broadcast(req.segmento)
+        if not dests:
+            raise HTTPException(status_code=422, detail="nenhum cliente elegível neste segmento")
+
+    # Banner opcional: carrega o arquivo salvo no upload e prepara para envio.
+    midia: dict | None = None
+    imagem_ref: str | None = None
+    if req.imagem:
+        arquivo = req.imagem.rsplit("/", 1)[-1]  # aceita "/media/x" ou só "x"
+        caminho = _media_file(arquivo)
+        if not caminho.exists():
+            raise HTTPException(status_code=422, detail="imagem não encontrada; reenvie o banner")
+        # extensão -> mimetype (inverso de _IMAGE_MIMES)
+        mimetype = next((m for m, ext in _IMAGE_MIMES.items() if ext == caminho.suffix), "image/jpeg")
+        midia = {
+            "b64": base64.b64encode(caminho.read_bytes()).decode("ascii"),
+            "mimetype": mimetype,
+            "filename": arquivo,
+        }
+        imagem_ref = f"/media/{arquivo}"
+
+    bid = store.create_broadcast(texto, len(dests), req.criado_por, imagem_ref)
+    bg.add_task(_run_broadcast, bid, texto, dests, midia)
     return {"id": bid, "total": len(dests), "status": "enviando"}
 
 

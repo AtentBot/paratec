@@ -137,11 +137,30 @@ def contar_segmentos() -> dict:
     return {seg: len(customers_para_broadcast(seg)) for seg in _SEGMENTOS}
 
 
-def create_broadcast(texto: str, total: int, criado_por: str | None = None) -> int:
+def customers_por_telefones(telefones: list[str]) -> list[dict]:
+    """Destinatários selecionados manualmente na tela, filtrados por elegibilidade.
+
+    Mantém só quem está ATIVO e sem opt-out (respeita quem pediu para não
+    receber, mesmo que tenha sido marcado). Preserva a ordem/unicidade via IN.
+    """
+    numeros = [t for t in {t.strip() for t in telefones} if t]
+    if not numeros:
+        return []
+    return query(
+        """SELECT c.telefone, c.razao_social, c.nome_contato FROM customers c
+             WHERE c.status = 'ativo' AND c.opt_out = false
+               AND c.telefone = ANY(%s)""",
+        (numeros,),
+    )
+
+
+def create_broadcast(
+    texto: str, total: int, criado_por: str | None = None, imagem: str | None = None
+) -> int:
     return execute(
-        """INSERT INTO broadcasts (texto, total, criado_por) VALUES (%s, %s, %s)
-           RETURNING id""",
-        (texto, total, criado_por), returning=True,
+        """INSERT INTO broadcasts (texto, total, criado_por, imagem)
+           VALUES (%s, %s, %s, %s) RETURNING id""",
+        (texto, total, criado_por, imagem), returning=True,
     )[0]["id"]
 
 
@@ -162,7 +181,7 @@ def finish_broadcast(bid: int, status: str = "concluido") -> None:
 
 def list_broadcasts(limit: int = 50) -> list[dict]:
     return query(
-        """SELECT id, texto, total, enviados, falhas, status, criado_por, created_at
+        """SELECT id, texto, total, enviados, falhas, status, criado_por, imagem, created_at
              FROM broadcasts ORDER BY created_at DESC LIMIT %s""",
         (limit,),
     )

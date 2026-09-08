@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS broadcasts (
 );
 CREATE INDEX IF NOT EXISTS idx_broadcasts_created ON broadcasts(created_at DESC);
 
+-- banner/imagem opcional da campanha (caminho relativo em /media, servido
+-- pelo agent-service). NULL = campanha só de texto.
+ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS imagem TEXT;
+
 -- ---------------------------------------------------------------------------
 -- Conversas (1 por thread; thread_id = número do WhatsApp)
 -- ---------------------------------------------------------------------------

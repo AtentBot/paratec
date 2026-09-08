@@ -85,9 +85,13 @@ services:
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-http://evolution-api:8080}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
       EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-paratec}
+      # Banners de promoções (persistidos no volume media abaixo).
+      MEDIA_DIR: /app/media
     depends_on: [evolution-api]
     ports:
       - "8000:8000"
+    volumes:
+      - agent_media:/app/media
 
   # Tela administrativa (Next.js). O navegador chama o agent-service direto,
   # então a URL pública é embutida no build (NEXT_PUBLIC_AGENT_API).
@@ -106,3 +110,4 @@ volumes:
   redisdata:
   evolution_instances:
   n8ndata:
+  agent_media:

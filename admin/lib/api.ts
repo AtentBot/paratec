@@ -10,6 +10,8 @@ import type {
   FilaItem,
   Metrics,
   Produto,
+  RagFonte,
+  RagStatus,
   RelatorioResumo,
 } from "./types";
 
@@ -75,6 +77,23 @@ export const api = {
   relatorioConversasCsvUrl: (desde: string, ate: string) =>
     `${BASE}/relatorios/conversas.csv?desde=${desde}&ate=${ate}`,
 
+  // Base de conhecimento (RAG)
+  ragStatus: () => get<RagStatus>("/rag/status"),
+  ragFontes: () => get<RagFonte[]>("/rag/fontes"),
+  ragReindexarCatalogo: () => send<{ ingeridos: number }>("POST", "/rag/ingest"),
+  ragRemoverFonte: (source: string) =>
+    send<{ removidos: number }>("DELETE", `/rag/fontes/${encodeURIComponent(source)}`),
+  ragUpload: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch(`${BASE}/rag/upload`, { method: "POST", body: fd, cache: "no-store" }).then(
+      async (r) => {
+        if (!r.ok) throw new Error(await r.text());
+        return r.json() as Promise<{ fonte: string; chunks: number }>;
+      },
+    );
+  },
+
   // Métricas
   metrics: () => get<Metrics>("/metrics/overview"),
 
@@ -116,12 +135,29 @@ export const api = {
   // Broadcast / promoções
   broadcasts: () => get<Broadcast[]>("/broadcasts"),
   broadcastSegmentos: () => get<Record<string, number>>("/broadcast/segmentos"),
-  enviarBroadcast: (texto: string, segmento = "todos", criado_por?: string) =>
-    send<{ id: number; total: number; status: string }>("POST", "/broadcast", {
-      texto,
-      segmento,
-      criado_por,
-    }),
+  // Envia uma promoção. Passe `telefones` (seleção manual) OU `segmento`.
+  // `imagem` = caminho devolvido por `uploadPromocaoImagem` (banner opcional).
+  enviarBroadcast: (payload: {
+    texto: string;
+    segmento?: string;
+    telefones?: string[];
+    imagem?: string | null;
+    criado_por?: string;
+  }) =>
+    send<{ id: number; total: number; status: string }>("POST", "/broadcast", payload),
+  // Sobe a imagem do banner; devolve o caminho para usar em `enviarBroadcast`.
+  uploadPromocaoImagem: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch(`${BASE}/broadcast/upload`, { method: "POST", body: fd, cache: "no-store" }).then(
+      async (r) => {
+        if (!r.ok) throw new Error(await r.text());
+        return r.json() as Promise<{ arquivo: string; url: string; mimetype: string }>;
+      },
+    );
+  },
+  // URL absoluta (via proxy /agent) de um arquivo em /media.
+  mediaUrl: (path: string) => `${BASE}${path.startsWith("/") ? path : `/${path}`}`,
   responderConversa: (threadId: string, texto: string) =>
     send<ConversaDetalhe>(
       "POST",

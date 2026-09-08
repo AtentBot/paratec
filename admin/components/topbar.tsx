@@ -12,6 +12,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/orcamentos": { title: "Orçamentos", sub: "Pedidos de orçamento para o comercial" },
   "/promocoes": { title: "Promoções", sub: "Envio de mensagens em massa" },
   "/relatorios": { title: "Relatórios", sub: "Indicadores por período e exportação" },
+  "/conhecimento": { title: "Base de conhecimento", sub: "Documentos que o agente consulta (RAG)" },
   "/catalogo": { title: "Catálogo", sub: "Produtos, variantes e categorias" },
   "/fila": { title: "Fila humana", sub: "Pedidos, entregas e boletos" },
 };

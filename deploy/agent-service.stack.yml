@@ -35,10 +35,14 @@ services:
       EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-paratec}
       # Libera o painel (admin) a chamar a API, se for hospedado.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # Banners de promoções (persistidos no volume media abaixo).
+      MEDIA_DIR: /app/media
     ports:
       - "8000:8000"   # exponha se o N8N chamar via host; se via rede, pode remover
     networks:
       - stack
+    volumes:
+      - agent_media:/app/media
 
 # Troque `external: true` + `name:` pela rede real do N8N para que o N8N
 # alcance o agente por http://agent-service:8000. Se preferir isolar e chamar
@@ -47,3 +51,6 @@ networks:
   stack:
     external: true
     name: ${SHARED_NETWORK:-bridge}
+
+volumes:
+  agent_media:

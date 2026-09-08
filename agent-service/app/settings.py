@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Intervalo entre envios no broadcast (anti-bloqueio do WhatsApp).
     broadcast_throttle_seconds: float = 4.0
 
+    # Diretório dos banners/imagens de promoções (servidos em /media). Vazio =
+    # <agent-service>/media. Aponte para um volume Docker para persistir.
+    media_dir: str = ""
+
     # RAG / base de conhecimento (pgvector dedicado). vector_host vazio = desabilitado.
     vector_host: str = ""
     vector_port: int = 5432

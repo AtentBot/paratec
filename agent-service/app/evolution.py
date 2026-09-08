@@ -37,3 +37,46 @@ def enviar_texto(telefone: str, texto: str) -> dict:
     if resp.status_code >= 400:
         raise EvolutionError(f"Evolution respondeu {resp.status_code}: {resp.text[:200]}")
     return resp.json() if resp.content else {}
+
+
+def enviar_midia(
+    telefone: str,
+    media_b64: str,
+    *,
+    mimetype: str,
+    filename: str,
+    caption: str = "",
+    mediatype: str = "image",
+) -> dict:
+    """Envia uma mídia (imagem/banner) pelo WhatsApp (Evolution API v2).
+
+    `media_b64` = conteúdo do arquivo em base64 (sem prefixo data:). Enviar o
+    conteúdo (em vez de URL) evita depender de o serviço estar acessível
+    publicamente pela Evolution. `caption` vira a legenda do banner.
+    """
+    if not settings.evolution_configured:
+        raise EvolutionError("Evolution API não configurada (EVOLUTION_API_URL/KEY).")
+
+    url = f"{settings.evolution_api_url.rstrip('/')}/message/sendMedia/{settings.evolution_instance}"
+    payload = {
+        "number": telefone,
+        "mediatype": mediatype,
+        "mimetype": mimetype,
+        "media": media_b64,
+        "fileName": filename,
+    }
+    if caption:
+        payload["caption"] = caption
+    try:
+        resp = httpx.post(
+            url,
+            headers={"apikey": settings.evolution_api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=60,  # mídia é maior que texto
+        )
+    except httpx.HTTPError as e:
+        raise EvolutionError(f"falha de rede ao chamar a Evolution: {e}") from e
+
+    if resp.status_code >= 400:
+        raise EvolutionError(f"Evolution respondeu {resp.status_code}: {resp.text[:200]}")
+    return resp.json() if resp.content else {}
