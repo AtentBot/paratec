@@ -132,6 +132,31 @@ CADASTRO_TOOLS = [verificar_cliente, cadastrar_cliente]
 
 
 # ---------------------------------------------------------------------------
+# Base de conhecimento (RAG) — busca semântica no catálogo/normas.
+# ---------------------------------------------------------------------------
+@tool
+def buscar_conhecimento(pergunta: str) -> str:
+    """Busca na base de conhecimento da Paratec (catálogo e, futuramente, normas
+    NBR/manuais) trechos relevantes para a dúvida do cliente. Use para perguntas
+    técnicas ou abertas que as buscas diretas de catálogo não cobrem bem."""
+    from . import rag
+
+    chunks = rag.buscar(pergunta, k=4)
+    if not chunks:
+        return _json({"encontrado": False})
+    return _json({
+        "encontrado": True,
+        "trechos": [
+            {"titulo": c.get("titulo"), "conteudo": (c.get("content") or "")[:800]}
+            for c in chunks
+        ],
+    })
+
+
+RAG_TOOLS = [buscar_conhecimento]
+
+
+# ---------------------------------------------------------------------------
 # Ferramentas dos especialistas ainda não integrados. Hoje coletam os dados
 # e encaminham para atendimento humano; cada uma é o ponto de integração com
 # o sistema de origem (ERP de pedidos, transportadora, financeiro/boletos).

@@ -34,6 +34,26 @@ class Settings(BaseSettings):
     # Intervalo entre envios no broadcast (anti-bloqueio do WhatsApp).
     broadcast_throttle_seconds: float = 4.0
 
+    # RAG / base de conhecimento (pgvector dedicado). vector_host vazio = desabilitado.
+    vector_host: str = ""
+    vector_port: int = 5432
+    vector_db: str = "rag"
+    vector_user: str = "postgres"
+    vector_password: str = ""
+    embedding_model: str = "models/text-embedding-004"  # 768 dims
+
+    @property
+    def rag_enabled(self) -> bool:
+        return bool(self.vector_host)
+
+    @property
+    def vector_dsn(self) -> str:
+        return (
+            f"host={self.vector_host} port={self.vector_port} dbname={self.vector_db} "
+            f"user={self.vector_user} password={self.vector_password} "
+            f"keepalives=1 keepalives_idle=30 keepalives_interval=10 keepalives_count=5"
+        )
+
     @property
     def evolution_configured(self) -> bool:
         return bool(self.evolution_api_url and self.evolution_api_key)

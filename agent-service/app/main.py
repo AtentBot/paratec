@@ -267,6 +267,26 @@ def relatorios_conversas_csv(desde: str, ate: str):
                 store.relatorio_conversas(desde, ate))
 
 
+# --- RAG / base de conhecimento --------------------------------------------
+
+@app.get("/rag/status")
+def rag_status():
+    from . import rag
+    return rag.status()
+
+
+@app.post("/rag/ingest")
+def rag_ingest():
+    """(Re)constrói a base de conhecimento a partir do catálogo."""
+    from . import rag
+    if not settings.rag_enabled:
+        raise HTTPException(status_code=503, detail="RAG não configurado (VECTOR_HOST)")
+    try:
+        return rag.ingest_catalogo()
+    except Exception as e:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=f"falha no ingest: {e}")
+
+
 # --- Orçamentos (comercial) — pedidos de orçamento gerados pelo agente ------
 
 @app.get("/orcamentos")

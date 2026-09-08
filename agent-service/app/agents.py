@@ -21,6 +21,7 @@ from .tools import (
     CATALOG_TOOLS,
     ENTREGA_TOOLS,
     PEDIDOS_TOOLS,
+    RAG_TOOLS,
 )
 
 log = logging.getLogger("paratec.agents")
@@ -30,7 +31,9 @@ OPT_OUT_PALAVRAS = {"sair", "parar", "pare", "cancelar", "stop", "descadastrar",
                     "remover", "sair da lista", "não quero", "nao quero"}
 
 # Todas as ferramentas em um só agente.
-ALL_TOOLS = CADASTRO_TOOLS + CATALOG_TOOLS + PEDIDOS_TOOLS + ENTREGA_TOOLS + BOLETOS_TOOLS
+ALL_TOOLS = (
+    CADASTRO_TOOLS + CATALOG_TOOLS + PEDIDOS_TOOLS + ENTREGA_TOOLS + BOLETOS_TOOLS + RAG_TOOLS
+)
 
 # Ferramenta de handoff -> (tipo na fila humana, nome do argumento com o resumo)
 FILA_TOOLS = {
@@ -46,7 +49,7 @@ TOOL_ESPECIALISTA = {
     "buscar_por_sku": "produtos", "listar_categorias": "produtos",
     "produtos_por_categoria": "produtos",
     "registrar_pedido": "pedidos", "consultar_entrega": "entrega",
-    "segunda_via_boleto": "boletos",
+    "segunda_via_boleto": "boletos", "buscar_conhecimento": "produtos",
 }
 
 MARCA = (
