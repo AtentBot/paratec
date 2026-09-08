@@ -101,6 +101,17 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Impressão / exportar PDF: esconde a navegação e imprime só o conteúdo. */
+.print-only { display: none; }
+@media print {
+  aside, header { display: none !important; }
+  body { background: #fff; }
+  main { max-width: none !important; padding: 0 !important; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
 /* Gradiente sutil "aurora" para o cabeçalho do dashboard */
 .aurora {
   background:

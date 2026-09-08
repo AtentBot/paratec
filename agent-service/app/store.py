@@ -108,12 +108,33 @@ def set_opt_out(telefone: str, value: bool = True) -> None:
 
 # --- Broadcast (envio em massa) ------------------------------------------
 
-def customers_para_broadcast() -> list[dict]:
-    """Clientes ATIVOS que não pediram opt-out (destinatários de campanha)."""
+_SEGMENTOS = {
+    "todos": "",
+    "com_orcamento": (
+        " AND EXISTS (SELECT 1 FROM queue_items q WHERE q.thread_id = c.telefone"
+        " AND q.tipo = 'pedido' AND q.status <> 'concluido')"
+    ),
+    "novos": " AND c.created_at >= now() - interval '30 days'",
+    "recentes": (
+        " AND EXISTS (SELECT 1 FROM conversations cv WHERE cv.thread_id = c.telefone"
+        " AND cv.updated_at >= now() - interval '30 days')"
+    ),
+}
+
+
+def customers_para_broadcast(segmento: str = "todos") -> list[dict]:
+    """Clientes ATIVOS sem opt-out, filtrados pelo segmento (ver _SEGMENTOS)."""
+    extra = _SEGMENTOS.get(segmento, "")
     return query(
-        """SELECT telefone, razao_social, nome_contato FROM customers
-            WHERE status = 'ativo' AND opt_out = false AND telefone IS NOT NULL"""
+        f"""SELECT c.telefone, c.razao_social, c.nome_contato FROM customers c
+             WHERE c.status = 'ativo' AND c.opt_out = false AND c.telefone IS NOT NULL
+             {extra}"""
     )
+
+
+def contar_segmentos() -> dict:
+    """Quantos clientes elegíveis em cada segmento (para a tela de promoções)."""
+    return {seg: len(customers_para_broadcast(seg)) for seg in _SEGMENTOS}
 
 
 def create_broadcast(texto: str, total: int, criado_por: str | None = None) -> int:

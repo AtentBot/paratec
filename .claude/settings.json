@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Skill(update-config)",
-      "Skill(update-config:*)"
+      "Skill(update-config:*)",
+      "Bash(agent-service/.venv/bin/python \"/tmp/claude-1000/-mnt-e-Paratec/1b037bbd-0ebf-44f7-9f53-1929508daa24/scratchpad/do_deploy.py\")"
     ]
   }
 }

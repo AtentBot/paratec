@@ -50,3 +50,4 @@ Thumbs.db
 
 # Docker / logs
 *.log
+.claude/settings.local.json

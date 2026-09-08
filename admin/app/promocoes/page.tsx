@@ -6,21 +6,30 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { relativo } from "@/lib/format";
 import type { Broadcast } from "@/lib/types";
-import { AlertTriangle, Megaphone, Send } from "lucide-react";
+import { AlertTriangle, Megaphone, Send, Target } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+
+const SEGMENTOS = [
+  { key: "todos", label: "Todos os ativos" },
+  { key: "com_orcamento", label: "Com orçamento aberto" },
+  { key: "novos", label: "Novos (30 dias)" },
+  { key: "recentes", label: "Ativos recentemente" },
+];
 
 export default function PromocoesPage() {
   const [texto, setTexto] = useState("");
-  const [elegiveis, setElegiveis] = useState<number | null>(null);
+  const [segmento, setSegmento] = useState("todos");
+  const [segmentos, setSegmentos] = useState<Record<string, number>>({});
   const [enviando, setEnviando] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [lista, setLista] = useState<Broadcast[]>([]);
+  const elegiveis = segmentos[segmento] ?? null;
 
   const carregar = useCallback(async () => {
     try {
-      const [clientes, bcs] = await Promise.all([api.clientes("ativo"), api.broadcasts()]);
-      setElegiveis(clientes.filter((c) => !c.opt_out).length);
+      const [segs, bcs] = await Promise.all([api.broadcastSegmentos(), api.broadcasts()]);
+      setSegmentos(segs);
       setLista(bcs);
       setOffline(false);
     } catch {
@@ -42,9 +51,10 @@ export default function PromocoesPage() {
   async function enviar() {
     const t = texto.trim();
     if (!t || enviando) return;
+    const segLabel = SEGMENTOS.find((s) => s.key === segmento)?.label ?? segmento;
     if (
       !window.confirm(
-        `Enviar esta mensagem para ${elegiveis ?? "?"} clientes ativos pelo WhatsApp?\n\n` +
+        `Enviar para ${elegiveis ?? "?"} clientes (${segLabel}) pelo WhatsApp?\n\n` +
           "⚠️ Disparo em massa pode levar ao bloqueio do número. O envio é espaçado (anti-bloqueio).",
       )
     )
@@ -52,7 +62,7 @@ export default function PromocoesPage() {
     setEnviando(true);
     setMsg(null);
     try {
-      const r = await api.enviarBroadcast(t);
+      const r = await api.enviarBroadcast(t, segmento);
       setMsg(`Campanha #${r.id} iniciada para ${r.total} clientes.`);
       setTexto("");
       carregar();
@@ -85,11 +95,33 @@ export default function PromocoesPage() {
             title="Nova promoção"
             subtitle={
               elegiveis === null
-                ? "carregando destinatários…"
-                : `${elegiveis} clientes ativos elegíveis`
+                ? "selecione um segmento"
+                : `${elegiveis} clientes elegíveis neste segmento`
             }
           />
           <div className="flex flex-col gap-3 p-5">
+            <div>
+              <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted">
+                <Target size={13} /> Segmento de destinatários
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {SEGMENTOS.map((s) => (
+                  <button
+                    key={s.key}
+                    onClick={() => setSegmento(s.key)}
+                    className={cn(
+                      "rounded-lg px-3 py-1.5 text-xs font-medium transition",
+                      segmento === s.key
+                        ? "bg-accent-soft text-accent-ink"
+                        : "bg-surface text-muted ring-1 ring-inset ring-border hover:text-ink",
+                    )}
+                  >
+                    {s.label}
+                    <span className="ml-1.5 text-faint">{segmentos[s.key] ?? "…"}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <textarea
               value={texto}
               onChange={(e) => setTexto(e.target.value)}

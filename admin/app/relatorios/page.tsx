@@ -12,6 +12,7 @@ import {
   Headset,
   Megaphone,
   MessagesSquare,
+  Printer,
   UserMinus,
   UserPlus,
 } from "lucide-react";
@@ -75,8 +76,22 @@ export default function RelatoriosPage() {
     <div className="flex flex-col gap-5 animate-fade-in">
       {offline && <OfflineNotice base={api.base} />}
 
+      <div className="print-only mb-2 border-b pb-2">
+        <p className="text-xl font-bold text-ink">Relatório · Paratec Atendimentos</p>
+        <p className="text-sm text-muted">Período: {desde} até {ate}</p>
+      </div>
+
+      <div className="no-print flex justify-end">
+        <button
+          onClick={() => window.print()}
+          className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-surface-2"
+        >
+          <Printer size={14} /> Baixar PDF
+        </button>
+      </div>
+
       {/* Período */}
-      <Card className="p-4">
+      <Card className="p-4 no-print">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex gap-1.5">
             {PRESETS.map((p) => (
@@ -141,7 +156,7 @@ export default function RelatoriosPage() {
       </div>
 
       {/* Exportações */}
-      <Card className="p-5">
+      <Card className="p-5 no-print">
         <p className="mb-3 text-sm font-semibold text-ink">Exportar (CSV)</p>
         <div className="flex flex-wrap gap-2.5">
           <a

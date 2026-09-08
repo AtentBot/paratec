@@ -115,9 +115,11 @@ export const api = {
 
   // Broadcast / promoções
   broadcasts: () => get<Broadcast[]>("/broadcasts"),
-  enviarBroadcast: (texto: string, criado_por?: string) =>
+  broadcastSegmentos: () => get<Record<string, number>>("/broadcast/segmentos"),
+  enviarBroadcast: (texto: string, segmento = "todos", criado_por?: string) =>
     send<{ id: number; total: number; status: string }>("POST", "/broadcast", {
       texto,
+      segmento,
       criado_por,
     }),
   responderConversa: (threadId: string, texto: string) =>

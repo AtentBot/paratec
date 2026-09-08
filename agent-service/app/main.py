@@ -61,6 +61,7 @@ class ResponderRequest(BaseModel):
 
 class BroadcastRequest(BaseModel):
     texto: str
+    segmento: str = "todos"
     criado_por: str | None = None
 
 
@@ -296,9 +297,9 @@ def broadcast(req: BroadcastRequest, bg: BackgroundTasks):
         raise HTTPException(status_code=422, detail="texto vazio")
     if not settings.evolution_configured:
         raise HTTPException(status_code=503, detail="Evolution API não configurada")
-    dests = store.customers_para_broadcast()
+    dests = store.customers_para_broadcast(req.segmento)
     if not dests:
-        raise HTTPException(status_code=422, detail="nenhum cliente elegível (ativo/sem opt-out)")
+        raise HTTPException(status_code=422, detail="nenhum cliente elegível neste segmento")
     bid = store.create_broadcast(texto, len(dests), req.criado_por)
     bg.add_task(_run_broadcast, bid, texto, dests)
     return {"id": bid, "total": len(dests), "status": "enviando"}
@@ -307,6 +308,12 @@ def broadcast(req: BroadcastRequest, bg: BackgroundTasks):
 @app.get("/broadcasts")
 def broadcasts():
     return store.list_broadcasts()
+
+
+@app.get("/broadcast/segmentos")
+def broadcast_segmentos():
+    """Quantidade de clientes elegíveis por segmento."""
+    return store.contar_segmentos()
 
 
 # --- Catálogo (consumido pela tela administrativa) -------------------------
