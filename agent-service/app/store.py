@@ -411,6 +411,13 @@ def add_note(thread_id: str, texto: str, autor: str | None = None) -> None:
         (thread_id, conteudo),
     )
     execute("UPDATE conversations SET updated_at = now() WHERE thread_id = %s", (thread_id,))
+    # Notifica assinantes SSE (nota também aparece em tempo real para outros atendentes).
+    try:
+        from . import realtime
+
+        realtime.broker.publish(thread_id, {"type": "message", "role": "nota"})
+    except Exception:  # pragma: no cover
+        pass
 
 
 def set_responsavel(thread_id: str, responsavel: str | None) -> dict | None:
