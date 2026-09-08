@@ -64,6 +64,15 @@ class BroadcastRequest(BaseModel):
     criado_por: str | None = None
 
 
+class NotaRequest(BaseModel):
+    texto: str
+    autor: str | None = None
+
+
+class AtribuirRequest(BaseModel):
+    responsavel: str | None = None
+
+
 @app.get("/health")
 def health():
     try:
@@ -85,8 +94,12 @@ def chat(req: ChatRequest):
 # --- Conversas (tela adm) --------------------------------------------------
 
 @app.get("/conversas")
-def conversas(status: str | None = None, limit: int = Query(100, ge=1, le=500)):
-    return store.list_conversations(status, limit)
+def conversas(
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+):
+    return store.list_conversations(status, q, limit)
 
 
 @app.get("/conversas/{thread_id}")
@@ -116,6 +129,25 @@ def resolver(thread_id: str):
 @app.post("/conversas/{thread_id}/reabrir")
 def reabrir(thread_id: str):
     c = store.reabrir_conversation(thread_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="conversa não encontrada")
+    return c
+
+
+@app.post("/conversas/{thread_id}/nota")
+def add_nota(thread_id: str, req: NotaRequest):
+    if store.get_conversation(thread_id) is None:
+        raise HTTPException(status_code=404, detail="conversa não encontrada")
+    texto = req.texto.strip()
+    if not texto:
+        raise HTTPException(status_code=422, detail="texto vazio")
+    store.add_note(thread_id, texto, req.autor)
+    return store.get_conversation(thread_id)
+
+
+@app.post("/conversas/{thread_id}/atribuir")
+def atribuir(thread_id: str, req: AtribuirRequest):
+    c = store.set_responsavel(thread_id, req.responsavel)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c

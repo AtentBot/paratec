@@ -234,26 +234,36 @@ def add_queue_item(
 
 # --- Leitura (endpoints da tela adm) -------------------------------------
 
-def list_conversations(status: str | None = None, limit: int = 100) -> list[dict]:
-    where = "WHERE status = %s" if status else ""
-    params: tuple = (status, limit) if status else (limit,)
+def list_conversations(
+    status: str | None = None, q: str | None = None, limit: int = 100
+) -> list[dict]:
+    conds, params = [], []
+    if status:
+        conds.append("status = %s")
+        params.append(status)
+    if q:
+        like = f"%{q}%"
+        conds.append("(cliente ILIKE %s OR telefone ILIKE %s OR thread_id ILIKE %s)")
+        params += [like, like, like]
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    params.append(limit)
     return query(
         f"""
         SELECT thread_id, cliente, telefone, status, especialista, unread,
-               last_preview, created_at, updated_at
+               last_preview, responsavel, created_at, updated_at
           FROM conversations
           {where}
          ORDER BY updated_at DESC
          LIMIT %s
         """,
-        params,
+        tuple(params),
     )
 
 
 def get_conversation(thread_id: str) -> dict | None:
     rows = query(
         """SELECT thread_id, cliente, telefone, status, especialista, unread,
-                  last_preview, created_at, updated_at
+                  last_preview, responsavel, created_at, updated_at
              FROM conversations WHERE thread_id = %s""",
         (thread_id,),
     )
@@ -266,6 +276,24 @@ def get_conversation(thread_id: str) -> dict | None:
         (thread_id,),
     )
     return conv
+
+
+def add_note(thread_id: str, texto: str, autor: str | None = None) -> None:
+    """Nota interna (não vai ao cliente); não altera prévia/não-lidas."""
+    conteudo = f"[{autor}] {texto}" if autor else texto
+    execute(
+        """INSERT INTO messages (thread_id, role, content) VALUES (%s, 'nota', %s)""",
+        (thread_id, conteudo),
+    )
+    execute("UPDATE conversations SET updated_at = now() WHERE thread_id = %s", (thread_id,))
+
+
+def set_responsavel(thread_id: str, responsavel: str | None) -> dict | None:
+    execute(
+        "UPDATE conversations SET responsavel = %s, updated_at = now() WHERE thread_id = %s",
+        (responsavel, thread_id),
+    )
+    return get_conversation(thread_id)
 
 
 def assumir_conversation(thread_id: str) -> dict | None:

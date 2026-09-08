@@ -81,6 +81,14 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, created_at);
 
+-- Notas internas do atendente (role 'nota'): não vão ao cliente.
+ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_role_check;
+ALTER TABLE messages ADD CONSTRAINT messages_role_check
+    CHECK (role IN ('cliente', 'agente', 'humano', 'nota'));
+
+-- Atendente responsável pela conversa.
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS responsavel TEXT;
+
 -- ---------------------------------------------------------------------------
 -- Eventos (telemetria de atendimento -> métricas do dashboard)
 -- tipo: mensagem_recebida | resposta_enviada | roteou_especialista

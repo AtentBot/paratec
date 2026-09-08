@@ -62,14 +62,34 @@ export const api = {
   cliente: (telefone: string) =>
     get<Cliente>(`/clientes/${encodeURIComponent(telefone)}`),
 
+  // Usuário logado (via Authentik forward-auth headers) — rota Next same-origin
+  whoami: () =>
+    fetch("/whoami", { cache: "no-store" })
+      .then((r) => r.json() as Promise<{ username: string | null; name: string | null }>)
+      .catch(() => ({ username: null, name: null })),
+
   // Métricas
   metrics: () => get<Metrics>("/metrics/overview"),
 
-  // Conversas
-  conversas: (status?: string) =>
-    get<ConversaResumo[]>(`/conversas${status ? `?status=${status}` : ""}`),
+  // Conversas / Atendimento
+  conversas: (params: { status?: string; q?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.q) qs.set("q", params.q);
+    const s = qs.toString();
+    return get<ConversaResumo[]>(`/conversas${s ? `?${s}` : ""}`);
+  },
   conversa: (threadId: string) =>
     get<ConversaDetalhe>(`/conversas/${encodeURIComponent(threadId)}`),
+  addNota: (threadId: string, texto: string, autor?: string) =>
+    send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/nota`, {
+      texto,
+      autor,
+    }),
+  atribuir: (threadId: string, responsavel: string | null) =>
+    send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/atribuir`, {
+      responsavel,
+    }),
   assumirConversa: (threadId: string) =>
     send<ConversaDetalhe>("POST", `/conversas/${encodeURIComponent(threadId)}/assumir`),
   resolverConversa: (threadId: string) =>

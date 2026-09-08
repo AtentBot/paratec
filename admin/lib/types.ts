@@ -65,7 +65,7 @@ export interface Broadcast {
 
 // --- Conversas ------------------------------------------------------------
 
-export type MsgRole = "cliente" | "agente" | "humano";
+export type MsgRole = "cliente" | "agente" | "humano" | "nota";
 
 export interface Mensagem {
   role: MsgRole;
@@ -82,6 +82,7 @@ export interface ConversaResumo {
   especialista: string | null;
   unread: number;
   last_preview: string | null;
+  responsavel?: string | null;
   created_at: string;
   updated_at: string;
 }

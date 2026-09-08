@@ -5,11 +5,7 @@ import { OfflineNotice } from "@/components/offline-notice";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { especialistaLabel, hora, iniciais, relativo } from "@/lib/format";
-import type {
-  ConversaDetalhe,
-  ConversaResumo,
-  ConversaStatus,
-} from "@/lib/types";
+import type { ConversaDetalhe, ConversaResumo, ConversaStatus } from "@/lib/types";
 import {
   CheckCheck,
   CircleCheck,
@@ -17,7 +13,11 @@ import {
   Inbox,
   Phone,
   RotateCcw,
+  Search,
   Send,
+  StickyNote,
+  UserCheck,
+  UserPlus,
   WifiOff,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -39,15 +39,25 @@ export default function ConversasPage() {
   const [lista, setLista] = useState<ConversaResumo[]>([]);
   const [ativa, setAtiva] = useState<ConversaDetalhe | null>(null);
   const [filtro, setFiltro] = useState<"todas" | ConversaStatus>("todas");
+  const [q, setQ] = useState("");
   const [offline, setOffline] = useState(false);
   const [carregando, setCarregando] = useState(true);
   const [texto, setTexto] = useState("");
+  const [modoNota, setModoNota] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
+  const [eu, setEu] = useState<{ name: string | null } | null>(null);
+
+  useEffect(() => {
+    api.whoami().then(setEu);
+  }, []);
 
   const carregarLista = useCallback(async () => {
     try {
-      const data = await api.conversas(filtro === "todas" ? undefined : filtro);
+      const data = await api.conversas({
+        status: filtro === "todas" ? undefined : filtro,
+        q: q.trim() || undefined,
+      });
       setLista(data);
       setOffline(false);
       return data;
@@ -58,7 +68,7 @@ export default function ConversasPage() {
     } finally {
       setCarregando(false);
     }
-  }, [filtro]);
+  }, [filtro, q]);
 
   const abrir = useCallback(async (threadId: string) => {
     try {
@@ -69,38 +79,20 @@ export default function ConversasPage() {
   }, []);
 
   useEffect(() => {
-    carregarLista().then((data) => {
-      if (data.length && (!ativa || !data.some((c) => c.thread_id === ativa.thread_id))) {
-        abrir(data[0].thread_id);
-      }
-    });
+    const t = setTimeout(() => {
+      carregarLista().then((data) => {
+        if (data.length && (!ativa || !data.some((c) => c.thread_id === ativa.thread_id))) {
+          abrir(data[0].thread_id);
+        }
+      });
+    }, 250);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtro]);
+  }, [filtro, q]);
 
-  async function assumir() {
-    if (!ativa) return;
+  async function acao(fn: () => Promise<ConversaDetalhe>) {
     try {
-      setAtiva(await api.assumirConversa(ativa.thread_id));
-      carregarLista();
-    } catch {
-      setOffline(true);
-    }
-  }
-
-  async function resolver() {
-    if (!ativa) return;
-    try {
-      setAtiva(await api.resolverConversa(ativa.thread_id));
-      carregarLista();
-    } catch {
-      setOffline(true);
-    }
-  }
-
-  async function reabrir() {
-    if (!ativa) return;
-    try {
-      setAtiva(await api.reabrirConversa(ativa.thread_id));
+      setAtiva(await fn());
       carregarLista();
     } catch {
       setOffline(true);
@@ -113,12 +105,18 @@ export default function ConversasPage() {
     setEnviando(true);
     setErroEnvio(null);
     try {
-      setAtiva(await api.responderConversa(ativa.thread_id, t));
+      if (modoNota) {
+        setAtiva(await api.addNota(ativa.thread_id, t, eu?.name ?? undefined));
+      } else {
+        setAtiva(await api.responderConversa(ativa.thread_id, t));
+      }
       setTexto("");
       carregarLista();
     } catch {
       setErroEnvio(
-        "Não foi possível enviar. Verifique se a Evolution API está configurada.",
+        modoNota
+          ? "Não foi possível salvar a nota."
+          : "Não foi possível enviar. Verifique se a Evolution API está configurada.",
       );
     } finally {
       setEnviando(false);
@@ -137,21 +135,35 @@ export default function ConversasPage() {
       <div className="grid h-[calc(100dvh-200px)] grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
         {/* Lista */}
         <Card className="flex flex-col overflow-hidden">
-          <div className="flex gap-1.5 border-b p-3">
-            {(["todas", "ia", "humano", "resolvida"] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => setFiltro(f)}
-                className={cn(
-                  "rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition",
-                  filtro === f
-                    ? "bg-accent-soft text-accent-ink"
-                    : "text-muted hover:bg-surface-2 hover:text-ink",
-                )}
-              >
-                {f === "ia" ? "IA" : f}
-              </button>
-            ))}
+          <div className="border-b p-3">
+            <div className="relative mb-2">
+              <Search
+                size={14}
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"
+              />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Buscar cliente ou telefone…"
+                className="w-full rounded-lg border bg-surface py-1.5 pl-8 pr-3 text-xs text-ink outline-none placeholder:text-faint focus:ring-2 focus:ring-accent/40"
+              />
+            </div>
+            <div className="flex gap-1.5">
+              {(["todas", "ia", "humano", "resolvida"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFiltro(f)}
+                  className={cn(
+                    "rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition",
+                    filtro === f
+                      ? "bg-accent-soft text-accent-ink"
+                      : "text-muted hover:bg-surface-2 hover:text-ink",
+                  )}
+                >
+                  {f === "ia" ? "IA" : f}
+                </button>
+              ))}
+            </div>
           </div>
 
           {carregando ? (
@@ -163,7 +175,7 @@ export default function ConversasPage() {
           ) : lista.length === 0 ? (
             <EmptyState
               icon={offline ? <WifiOff size={24} /> : <Inbox size={24} />}
-              title={offline ? "Backend offline" : "Nenhuma conversa"}
+              title={offline ? "Backend offline" : q ? "Nada encontrado" : "Nenhuma conversa"}
               hint={
                 offline
                   ? "Suba o agent-service para ver os atendimentos."
@@ -188,16 +200,17 @@ export default function ConversasPage() {
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <p className="truncate text-sm font-medium text-ink">
-                          {nome(c)}
-                        </p>
+                        <p className="truncate text-sm font-medium text-ink">{nome(c)}</p>
                         <span className="shrink-0 text-[11px] text-faint">
                           {relativo(c.updated_at)}
                         </span>
                       </div>
-                      <p className="truncate text-xs text-muted">
-                        {c.last_preview ?? "—"}
-                      </p>
+                      <p className="truncate text-xs text-muted">{c.last_preview ?? "—"}</p>
+                      {c.responsavel && (
+                        <p className="mt-0.5 flex items-center gap-1 text-[10px] text-info">
+                          <UserCheck size={10} /> {c.responsavel}
+                        </p>
+                      )}
                     </div>
                     {c.unread > 0 && (
                       <span className="mt-1 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] font-semibold text-white">
@@ -221,18 +234,29 @@ export default function ConversasPage() {
             />
           ) : (
             <>
-              <div className="flex items-center gap-3 border-b px-5 py-3.5">
+              <div className="flex flex-wrap items-center gap-2 border-b px-5 py-3">
                 <span className="grid h-10 w-10 place-items-center rounded-full bg-accent-soft text-sm font-semibold text-accent-ink">
                   {iniciais(ativa.cliente, ativa.telefone ?? ativa.thread_id)}
                 </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-ink">
-                    {nome(ativa)}
-                  </p>
+                <div className="mr-auto min-w-0">
+                  <p className="truncate text-sm font-semibold text-ink">{nome(ativa)}</p>
                   <p className="flex items-center gap-1 text-xs text-muted">
                     <Phone size={11} /> {ativa.telefone ?? ativa.thread_id}
                   </p>
                 </div>
+                {ativa.responsavel ? (
+                  <Badge tone="info" dot>
+                    <UserCheck size={11} /> {ativa.responsavel}
+                  </Badge>
+                ) : (
+                  <button
+                    onClick={() => eu?.name && acao(() => api.atribuir(ativa.thread_id, eu.name))}
+                    disabled={!eu?.name}
+                    className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium text-ink transition hover:bg-surface-2 disabled:opacity-50"
+                  >
+                    <UserPlus size={13} /> Atribuir a mim
+                  </button>
+                )}
                 {ativa.especialista && (
                   <Badge tone="neutral">
                     {especialistaLabel[ativa.especialista] ?? ativa.especialista}
@@ -243,14 +267,14 @@ export default function ConversasPage() {
                 </Badge>
                 {ativa.status === "resolvida" ? (
                   <button
-                    onClick={reabrir}
+                    onClick={() => acao(() => api.reabrirConversa(ativa.thread_id))}
                     className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium text-ink transition hover:bg-surface-2"
                   >
                     <RotateCcw size={13} /> Reabrir
                   </button>
                 ) : (
                   <button
-                    onClick={resolver}
+                    onClick={() => acao(() => api.resolverConversa(ativa.thread_id))}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-success/10 px-2.5 py-1.5 text-xs font-medium text-success transition hover:bg-success/20"
                   >
                     <CircleCheck size={13} /> Resolver
@@ -265,12 +289,22 @@ export default function ConversasPage() {
                   </p>
                 ) : (
                   ativa.mensagens.map((m, i) => {
+                    if (m.role === "nota") {
+                      return (
+                        <div key={i} className="flex justify-center">
+                          <div className="max-w-[85%] rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-warning">
+                            <span className="mr-1 font-semibold">📝 Nota interna:</span>
+                            <span className="whitespace-pre-wrap">{m.content}</span>
+                            <span className="ml-1 text-[10px] opacity-70">
+                              · {hora(m.created_at)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    }
                     const meu = m.role !== "cliente";
                     return (
-                      <div
-                        key={i}
-                        className={cn("flex", meu ? "justify-end" : "justify-start")}
-                      >
+                      <div key={i} className={cn("flex", meu ? "justify-end" : "justify-start")}>
                         <div
                           className={cn(
                             "max-w-[75%] rounded-2xl px-3.5 py-2 text-sm shadow-card",
@@ -297,18 +331,26 @@ export default function ConversasPage() {
               </div>
 
               <div className="flex items-center gap-2 border-t p-3">
-                {ativa.status !== "humano" ? (
+                {ativa.status !== "humano" && (
                   <button
-                    onClick={assumir}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-feature px-3 py-2 text-xs font-medium text-feature-fg transition hover:opacity-90"
+                    onClick={() => acao(() => api.assumirConversa(ativa.thread_id))}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-feature px-3 py-2 text-xs font-medium text-feature-fg transition hover:opacity-90"
                   >
-                    <Headset size={14} /> Assumir atendimento
+                    <Headset size={14} /> Assumir
                   </button>
-                ) : (
-                  <Badge tone="danger" dot>
-                    Atendimento humano em andamento
-                  </Badge>
                 )}
+                <button
+                  onClick={() => setModoNota((v) => !v)}
+                  title={modoNota ? "Modo: nota interna" : "Modo: responder cliente"}
+                  className={cn(
+                    "grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition",
+                    modoNota
+                      ? "border-warning/50 bg-warning/10 text-warning"
+                      : "text-muted hover:bg-surface-2 hover:text-ink",
+                  )}
+                >
+                  <StickyNote size={15} />
+                </button>
                 <div className="relative flex-1">
                   <input
                     value={texto}
@@ -319,16 +361,26 @@ export default function ConversasPage() {
                         enviar();
                       }
                     }}
-                    placeholder="Responder ao cliente pelo WhatsApp…"
+                    placeholder={
+                      modoNota
+                        ? "Nota interna (não vai ao cliente)…"
+                        : "Responder ao cliente pelo WhatsApp…"
+                    }
                     disabled={enviando}
-                    className="w-full rounded-lg border bg-surface py-2 pl-3 pr-10 text-sm text-ink outline-none placeholder:text-faint focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
+                    className={cn(
+                      "w-full rounded-lg border bg-surface py-2 pl-3 pr-10 text-sm text-ink outline-none placeholder:text-faint focus:ring-2 disabled:opacity-60",
+                      modoNota ? "focus:ring-warning/40" : "focus:ring-accent/40",
+                    )}
                   />
                   <button
                     onClick={enviar}
                     disabled={enviando || !texto.trim()}
-                    className="absolute right-1.5 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md bg-accent text-accent-ink transition hover:opacity-90 disabled:opacity-50"
+                    className={cn(
+                      "absolute right-1.5 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md transition hover:opacity-90 disabled:opacity-50",
+                      modoNota ? "bg-warning text-white" : "bg-accent text-accent-ink",
+                    )}
                   >
-                    <Send size={14} />
+                    {modoNota ? <StickyNote size={14} /> : <Send size={14} />}
                   </button>
                 </div>
               </div>
