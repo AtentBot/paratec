@@ -1,7 +1,10 @@
 // Cliente do agent-service (FastAPI). Todas as seções agora consomem dados
 // reais; não há mais fixtures. Falhas de rede são tratadas por `tryApi`.
 import type {
+  Agente,
   Broadcast,
+  Capacidade,
+  CapacidadeInfo,
   CatalogStats,
   Categoria,
   Cliente,
@@ -14,6 +17,9 @@ import type {
   RagStatus,
   RelatorioResumo,
   Vendedor,
+  WhatsappConfig,
+  WhatsappInstancia,
+  WhatsappQrCode,
 } from "./types";
 
 // No NAVEGADOR: same-origin "/agent" (o Next faz proxy p/ o agent-service
@@ -195,6 +201,50 @@ export const api = {
   ) => send<Vendedor>("PATCH", `/vendedores/${id}`, body),
   removerVendedor: (id: number) =>
     send<{ removido: number }>("DELETE", `/vendedores/${id}`),
+
+  // WhatsApp — conexões (Configurações). O agent-service é proxy da Evolution:
+  // o painel nunca recebe a URL/chave da Evolution.
+  whatsappConfig: () => get<WhatsappConfig>("/whatsapp/config"),
+  whatsappInstancias: () => get<WhatsappInstancia[]>("/whatsapp/instancias"),
+  whatsappCriar: (nome: string) =>
+    send<{ nome: string; qrcode: WhatsappQrCode }>("POST", "/whatsapp/instancias", { nome }),
+  whatsappQrcode: (nome: string) =>
+    get<{ nome: string; qrcode: WhatsappQrCode }>(
+      `/whatsapp/instancias/${encodeURIComponent(nome)}/qrcode`,
+    ),
+  whatsappStatus: (nome: string) =>
+    get<WhatsappInstancia>(`/whatsapp/instancias/${encodeURIComponent(nome)}/status`),
+  whatsappDesconectar: (nome: string) =>
+    send<{ nome: string; estado: string }>(
+      "POST",
+      `/whatsapp/instancias/${encodeURIComponent(nome)}/desconectar`,
+    ),
+  whatsappRemover: (nome: string) =>
+    send<{ removido: string }>("DELETE", `/whatsapp/instancias/${encodeURIComponent(nome)}`),
+
+  // Agentes (multi-agente por número de WhatsApp)
+  agentes: () => get<Agente[]>("/agentes"),
+  agenteCapacidades: () => get<CapacidadeInfo[]>("/agentes/capacidades"),
+  criarAgente: (body: {
+    nome: string;
+    descricao?: string | null;
+    instancia?: string | null;
+    persona?: string | null;
+    capacidades?: Capacidade[];
+    ativo?: boolean;
+  }) => send<Agente>("POST", "/agentes", body),
+  atualizarAgente: (
+    id: number,
+    body: {
+      nome?: string;
+      descricao?: string | null;
+      instancia?: string | null;
+      persona?: string | null;
+      capacidades?: Capacidade[];
+      ativo?: boolean;
+    },
+  ) => send<Agente>("PATCH", `/agentes/${id}`, body),
+  removerAgente: (id: number) => send<{ removido: number }>("DELETE", `/agentes/${id}`),
 
   // Fila humana
   fila: (params: { tipo?: string; status?: string } = {}) => {

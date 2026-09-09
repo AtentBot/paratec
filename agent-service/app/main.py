@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -18,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import catalog, evolution, realtime, store
-from .agents import responder
+from .agents import CAPACIDADES, CAPACIDADES_ORDEM, responder
 from .db import get_pool
 from .settings import settings
 
@@ -74,6 +75,9 @@ class ChatRequest(BaseModel):
     thread_id: str = "default"
     cliente: str | None = None
     telefone: str | None = None
+    # instância Evolution (número) por onde a mensagem chegou — define o agente
+    # que responde (persona + capacidades). Vazio = agente padrão.
+    instancia: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -127,6 +131,24 @@ class VendedorUpdate(BaseModel):
     ativo: bool | None = None
 
 
+class AgenteCreate(BaseModel):
+    nome: str
+    descricao: str | None = None
+    instancia: str | None = None
+    persona: str | None = None
+    capacidades: list[str] = []
+    ativo: bool = True
+
+
+class AgenteUpdate(BaseModel):
+    nome: str | None = None
+    descricao: str | None = None
+    instancia: str | None = None
+    persona: str | None = None
+    capacidades: list[str] | None = None
+    ativo: bool | None = None
+
+
 @app.get("/health")
 def health():
     try:
@@ -141,7 +163,9 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    resposta = responder(req.mensagem, req.thread_id, req.cliente, req.telefone)
+    resposta = responder(
+        req.mensagem, req.thread_id, req.cliente, req.telefone, req.instancia
+    )
     return ChatResponse(resposta=resposta)
 
 
@@ -266,10 +290,12 @@ def responder_conversa(thread_id: str, req: ResponderRequest):
     texto = req.texto.strip()
     if not texto:
         raise HTTPException(status_code=422, detail="texto vazio")
-    if store.get_conversation(thread_id) is None:
+    conv = store.get_conversation(thread_id)
+    if conv is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     try:
-        evolution.enviar_texto(thread_id, texto)
+        # Responde pela MESMA instância (número) que recebeu a conversa.
+        evolution.enviar_texto(thread_id, texto, instancia=conv.get("instancia"))
     except evolution.EvolutionError as e:
         raise HTTPException(status_code=503, detail=str(e))
     store.add_message(thread_id, "humano", texto)
@@ -328,6 +354,167 @@ def vendedor_remover(seller_id: int):
     if not store.delete_seller(seller_id):
         raise HTTPException(status_code=404, detail="vendedor não encontrado")
     return {"removido": seller_id}
+
+
+# --- WhatsApp: conexões (tela de Configurações) ----------------------------
+# O agent-service faz de PROXY da Evolution API: o painel gerencia instâncias e
+# lê o QR Code sem nunca receber a URL/chave da Evolution. Requer Evolution
+# configurada (EVOLUTION_API_URL/KEY) — caso contrário devolve 503.
+
+_INSTANCIA_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,39}$")
+
+
+class InstanciaCreate(BaseModel):
+    nome: str
+
+
+def _normalizar_instancia(nome: str) -> str:
+    """Sanitiza o nome da instância (minúsculas, sem espaços/acentos)."""
+    slug = re.sub(r"[^a-z0-9_-]", "-", (nome or "").strip().lower()).strip("-")
+    slug = re.sub(r"-{2,}", "-", slug)
+    if not _INSTANCIA_RE.match(slug):
+        raise HTTPException(
+            status_code=422,
+            detail="nome inválido: use 2 a 40 caracteres (letras, números, - ou _)",
+        )
+    return slug
+
+
+def _evolution_guard():
+    if not settings.evolution_configured:
+        raise HTTPException(status_code=503, detail="Evolution API não configurada")
+
+
+def _evolution_call(fn, *args):
+    _evolution_guard()
+    try:
+        return fn(*args)
+    except evolution.EvolutionError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/whatsapp/config")
+def whatsapp_config():
+    """Diz ao painel se a integração está ligada e se o webhook é automático."""
+    return {
+        "configurado": settings.evolution_configured,
+        "webhook_automatico": bool(settings.evolution_webhook_url),
+        "instancia_padrao": settings.evolution_instance,
+    }
+
+
+@app.get("/whatsapp/instancias")
+def whatsapp_instancias():
+    return _evolution_call(evolution.listar_instancias)
+
+
+@app.post("/whatsapp/instancias")
+def whatsapp_criar(req: InstanciaCreate):
+    """Cria uma instância e devolve o QR Code inicial para o admin escanear."""
+    nome = _normalizar_instancia(req.nome)
+    qr = _evolution_call(evolution.criar_instancia, nome)
+    return {"nome": nome, "qrcode": qr}
+
+
+@app.get("/whatsapp/instancias/{nome}/qrcode")
+def whatsapp_qrcode(nome: str):
+    """(Re)gera o QR Code de uma instância existente (renovação do código)."""
+    return {"nome": nome, "qrcode": _evolution_call(evolution.conectar_instancia, nome)}
+
+
+@app.get("/whatsapp/instancias/{nome}/status")
+def whatsapp_status(nome: str):
+    return _evolution_call(evolution.status_instancia, nome)
+
+
+@app.post("/whatsapp/instancias/{nome}/desconectar")
+def whatsapp_desconectar(nome: str):
+    _evolution_call(evolution.desconectar_instancia, nome)
+    return {"nome": nome, "estado": "desconectado"}
+
+
+@app.delete("/whatsapp/instancias/{nome}")
+def whatsapp_remover(nome: str):
+    _evolution_call(evolution.remover_instancia, nome)
+    return {"removido": nome}
+
+
+# --- Agentes (multi-agente por número de WhatsApp) -------------------------
+# Cada agente = persona + capacidades, amarrado a uma instância (número). Ao
+# chegar mensagem por aquele número, é este agente que responde (ver agents.py).
+
+def _validar_capacidades(caps: list[str]) -> list[str]:
+    invalidas = [c for c in caps if c not in CAPACIDADES]
+    if invalidas:
+        raise HTTPException(status_code=422, detail=f"capacidade(s) inválida(s): {invalidas}")
+    # Mantém a ordem canônica e remove duplicatas.
+    return [c for c in CAPACIDADES_ORDEM if c in set(caps)]
+
+
+@app.get("/agentes/capacidades")
+def agentes_capacidades():
+    """Catálogo de capacidades para a tela de Agentes (chave + rótulo)."""
+    return [{"chave": c, "label": CAPACIDADES[c]["label"]} for c in CAPACIDADES_ORDEM]
+
+
+@app.get("/agentes")
+def agentes():
+    return store.list_agents()
+
+
+@app.post("/agentes")
+def agente_criar(req: AgenteCreate):
+    nome = (req.nome or "").strip()
+    if not nome:
+        raise HTTPException(status_code=422, detail="informe o nome do agente")
+    caps = _validar_capacidades(req.capacidades)
+    inst = (req.instancia or "").strip() or None
+    if inst and store.get_agent_by_instancia(inst):
+        raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
+    try:
+        return store.create_agent(nome, req.descricao, inst, req.persona, caps, req.ativo)
+    except Exception as e:
+        # Índice único parcial: número já amarrado (corrida) -> conflito amigável.
+        if "idx_agents_instancia" in str(e):
+            raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
+        raise
+
+
+@app.patch("/agentes/{agent_id}")
+def agente_atualizar(agent_id: int, req: AgenteUpdate):
+    caps = _validar_capacidades(req.capacidades) if req.capacidades is not None else None
+    # "instancia": "" (string vazia) = desamarrar o número; ausente = manter.
+    limpar = req.instancia is not None and (req.instancia or "").strip() == ""
+    inst = (req.instancia or "").strip() or None
+    if inst:
+        outro = store.get_agent_by_instancia(inst)
+        if outro and outro["id"] != agent_id:
+            raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
+    try:
+        v = store.update_agent(
+            agent_id,
+            nome=(req.nome.strip() if req.nome else None),
+            descricao=req.descricao,
+            instancia=inst,
+            persona=req.persona,
+            capacidades=caps,
+            ativo=req.ativo,
+            limpar_instancia=limpar,
+        )
+    except Exception as e:
+        if "idx_agents_instancia" in str(e):
+            raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
+        raise
+    if v is None:
+        raise HTTPException(status_code=404, detail="agente não encontrado")
+    return v
+
+
+@app.delete("/agentes/{agent_id}")
+def agente_remover(agent_id: int):
+    if not store.delete_agent(agent_id):
+        raise HTTPException(status_code=404, detail="agente não encontrado")
+    return {"removido": agent_id}
 
 
 # --- Fila humana (tela adm) ------------------------------------------------

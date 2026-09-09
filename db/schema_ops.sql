@@ -71,6 +71,11 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS idx_conversations_status  ON conversations(status);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
 
+-- Instância Evolution (número de WhatsApp) pela qual a conversa chegou. Define
+-- qual AGENTE atende (ver tabela agents) e por qual número a resposta humana
+-- deve sair. NULL = fluxo legado de número único (instância padrão).
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS instancia TEXT;
+
 -- ---------------------------------------------------------------------------
 -- Mensagens (histórico exibido na tela; ordem cronológica por thread)
 -- ---------------------------------------------------------------------------
@@ -149,3 +154,29 @@ CREATE TABLE IF NOT EXISTS sellers (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sellers_ativo ON sellers(ativo);
+
+-- ---------------------------------------------------------------------------
+-- Agentes de atendimento (multi-agente por número de WhatsApp)
+-- Cada agente tem uma PERSONA (instruções próprias) e um conjunto de
+-- CAPACIDADES (grupos de ferramentas: catalogo, pedidos, entrega, boletos,
+-- conhecimento). Fica amarrado a UMA instância Evolution (número de WhatsApp):
+-- ao chegar uma mensagem por aquele número, é este agente que responde.
+-- Ex.: "Financeiro" -> boletos; "Comercial" -> catalogo+pedidos; "Logística"
+-- -> entrega. Sem agente para a instância, cai no fluxo padrão (todas as tools).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS agents (
+    id           BIGSERIAL PRIMARY KEY,
+    nome         TEXT NOT NULL,
+    descricao    TEXT,
+    instancia    TEXT,                          -- nome da instância Evolution amarrada
+    persona      TEXT,                          -- instruções extras / tom deste agente
+    capacidades  TEXT[] NOT NULL DEFAULT '{}',  -- ex: {catalogo,pedidos,entrega,boletos,conhecimento}
+    ativo        BOOLEAN NOT NULL DEFAULT true,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Uma instância (número) só pode ser atendida por um agente. Índice único
+-- parcial: permite vários agentes SEM instância amarrada (rascunhos).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_instancia
+    ON agents(instancia) WHERE instancia IS NOT NULL;

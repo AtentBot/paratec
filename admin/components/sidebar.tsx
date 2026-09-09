@@ -12,6 +12,8 @@ import {
   Megaphone,
   FileBarChart,
   BookOpen,
+  Bot,
+  Settings,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -37,6 +39,39 @@ const NAV: NavItem[] = [
   { href: "/relatorios", label: "Relatórios", icon: FileBarChart },
 ];
 
+const SISTEMA: NavItem[] = [
+  { href: "/agentes", label: "Agentes", icon: Bot },
+  { href: "/configuracoes", label: "Configurações", icon: Settings },
+];
+
+function NavLink({ item, path }: { item: NavItem; path: string }) {
+  const { href, label, icon: Icon, badge } = item;
+  const active = href === "/" ? path === "/" : path.startsWith(href);
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition",
+        active
+          ? "bg-accent-soft text-accent-ink"
+          : "text-muted hover:bg-surface-2 hover:text-ink",
+      )}
+    >
+      {active && <span className="absolute inset-y-1.5 left-0 w-1 rounded-full bg-accent" />}
+      <Icon
+        size={18}
+        className={cn(active ? "text-accent-ink" : "text-faint group-hover:text-ink")}
+      />
+      <span className="flex-1">{label}</span>
+      {badge ? (
+        <span className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] font-semibold text-white">
+          {badge}
+        </span>
+      ) : null}
+    </Link>
+  );
+}
+
 export function Sidebar() {
   const path = usePathname();
 
@@ -56,35 +91,16 @@ export function Sidebar() {
         <p className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-faint">
           Operação
         </p>
-        {NAV.map(({ href, label, icon: Icon, badge }) => {
-          const active = href === "/" ? path === "/" : path.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition",
-                active
-                  ? "bg-accent-soft text-accent-ink"
-                  : "text-muted hover:bg-surface-2 hover:text-ink",
-              )}
-            >
-              {active && (
-                <span className="absolute inset-y-1.5 left-0 w-1 rounded-full bg-accent" />
-              )}
-              <Icon
-                size={18}
-                className={cn(active ? "text-accent-ink" : "text-faint group-hover:text-ink")}
-              />
-              <span className="flex-1">{label}</span>
-              {badge ? (
-                <span className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] font-semibold text-white">
-                  {badge}
-                </span>
-              ) : null}
-            </Link>
-          );
-        })}
+        {NAV.map((item) => (
+          <NavLink key={item.href} item={item} path={path} />
+        ))}
+
+        <p className="px-3 pb-1 pt-5 text-[10px] font-semibold uppercase tracking-wider text-faint">
+          Sistema
+        </p>
+        {SISTEMA.map((item) => (
+          <NavLink key={item.href} item={item} path={path} />
+        ))}
       </nav>
 
       <div className="border-t px-4 py-3">

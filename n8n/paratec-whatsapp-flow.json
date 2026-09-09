@@ -31,7 +31,7 @@
         "url": "http://paratec-agent:8000/chat",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"mensagem\": {{ JSON.stringify($json.mensagem) }},\n  \"thread_id\": {{ JSON.stringify($json.thread_id) }},\n  \"telefone\": {{ JSON.stringify($json.number) }}\n}",
+        "jsonBody": "={\n  \"mensagem\": {{ JSON.stringify($json.mensagem) }},\n  \"thread_id\": {{ JSON.stringify($json.thread_id) }},\n  \"telefone\": {{ JSON.stringify($json.number) }},\n  \"instancia\": {{ JSON.stringify($json.instance) }}\n}",
         "options": {}
       },
       "id": "chamar-agente",

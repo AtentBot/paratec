@@ -231,17 +231,19 @@ def upsert_conversation(
     thread_id: str,
     cliente: str | None = None,
     telefone: str | None = None,
+    instancia: str | None = None,
 ) -> None:
     execute(
         """
-        INSERT INTO conversations (thread_id, cliente, telefone, updated_at)
-        VALUES (%s, %s, %s, now())
+        INSERT INTO conversations (thread_id, cliente, telefone, instancia, updated_at)
+        VALUES (%s, %s, %s, %s, now())
         ON CONFLICT (thread_id) DO UPDATE
            SET cliente   = COALESCE(EXCLUDED.cliente, conversations.cliente),
                telefone  = COALESCE(EXCLUDED.telefone, conversations.telefone),
+               instancia = COALESCE(EXCLUDED.instancia, conversations.instancia),
                updated_at = now()
         """,
-        (thread_id, cliente, telefone or thread_id),
+        (thread_id, cliente, telefone or thread_id, instancia),
     )
 
 
@@ -374,7 +376,7 @@ def list_conversations(
     params.append(limit)
     return query(
         f"""
-        SELECT thread_id, cliente, telefone, status, especialista, unread,
+        SELECT thread_id, cliente, telefone, instancia, status, especialista, unread,
                last_preview, responsavel, created_at, updated_at
           FROM conversations
           {where}
@@ -387,7 +389,7 @@ def list_conversations(
 
 def get_conversation(thread_id: str) -> dict | None:
     rows = query(
-        """SELECT thread_id, cliente, telefone, status, especialista, unread,
+        """SELECT thread_id, cliente, telefone, instancia, status, especialista, unread,
                   last_preview, responsavel, created_at, updated_at
              FROM conversations WHERE thread_id = %s""",
         (thread_id,),
@@ -552,6 +554,92 @@ def update_seller(
 def delete_seller(seller_id: int) -> bool:
     rows = execute(
         "DELETE FROM sellers WHERE id = %s RETURNING id", (seller_id,), returning=True
+    )
+    return bool(rows)
+
+
+# --- Agentes (multi-agente por número de WhatsApp) ------------------------
+
+_AGENT_COLS = (
+    "id, nome, descricao, instancia, persona, capacidades, ativo, created_at, updated_at"
+)
+
+
+def list_agents() -> list[dict]:
+    return query(f"SELECT {_AGENT_COLS} FROM agents ORDER BY nome")
+
+
+def get_agent(agent_id: int) -> dict | None:
+    rows = query(f"SELECT {_AGENT_COLS} FROM agents WHERE id = %s", (agent_id,))
+    return rows[0] if rows else None
+
+
+def get_agent_by_instancia(instancia: str) -> dict | None:
+    """Agente ATIVO amarrado a esta instância Evolution (número de WhatsApp)."""
+    rows = query(
+        f"SELECT {_AGENT_COLS} FROM agents WHERE instancia = %s AND ativo = true",
+        (instancia,),
+    )
+    return rows[0] if rows else None
+
+
+def create_agent(
+    nome: str,
+    descricao: str | None,
+    instancia: str | None,
+    persona: str | None,
+    capacidades: list[str],
+    ativo: bool = True,
+) -> dict:
+    rows = execute(
+        f"""INSERT INTO agents (nome, descricao, instancia, persona, capacidades, ativo)
+             VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_AGENT_COLS}""",
+        (nome, descricao, instancia or None, persona, capacidades, ativo),
+        returning=True,
+    )
+    return rows[0]
+
+
+def update_agent(
+    agent_id: int,
+    nome: str | None = None,
+    descricao: str | None = None,
+    instancia: str | None = None,
+    persona: str | None = None,
+    capacidades: list[str] | None = None,
+    ativo: bool | None = None,
+    *,
+    limpar_instancia: bool = False,
+) -> dict | None:
+    """Atualiza campos informados. `limpar_instancia=True` desamarra o número
+    (grava NULL), já que COALESCE sozinho não permite voltar a NULL."""
+    inst_sql = "instancia = NULL" if limpar_instancia else "instancia = COALESCE(%s, instancia)"
+    params: list = [nome, descricao]
+    if not limpar_instancia:
+        params.append(instancia or None)
+    params += [persona, capacidades, ativo, agent_id]
+    rows = execute(
+        f"""
+        UPDATE agents SET
+            nome        = COALESCE(%s, nome),
+            descricao   = COALESCE(%s, descricao),
+            {inst_sql},
+            persona     = COALESCE(%s, persona),
+            capacidades = COALESCE(%s, capacidades),
+            ativo       = COALESCE(%s, ativo),
+            updated_at  = now()
+         WHERE id = %s
+        RETURNING {_AGENT_COLS}
+        """,
+        tuple(params),
+        returning=True,
+    )
+    return rows[0] if rows else None
+
+
+def delete_agent(agent_id: int) -> bool:
+    rows = execute(
+        "DELETE FROM agents WHERE id = %s RETURNING id", (agent_id,), returning=True
     )
     return bool(rows)
 

@@ -29,10 +29,14 @@ services:
       # LLM (a chave que funcionou, com prepay ativo).
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:?defina no Portainer}
       LLM_MODEL: ${LLM_MODEL:-gemini-flash-latest}
-      # Envio de saída pelo painel (opcional): URL interna da Evolution + chave.
+      # Envio de saída + gerência de instâncias pelo painel (opcional): URL
+      # interna da Evolution + chave GLOBAL (AUTHENTICATION_API_KEY).
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
       EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-paratec}
+      # Webhook (N8N) que a Evolution deve chamar ao conectar um número novo
+      # pelo painel. Vazio = não configura webhook automaticamente.
+      EVOLUTION_WEBHOOK_URL: ${EVOLUTION_WEBHOOK_URL:-}
       # Libera o painel (admin) a chamar a API, se for hospedado.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       # Banners de promoções (persistidos no volume media abaixo).

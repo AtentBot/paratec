@@ -60,31 +60,93 @@ MARCA = (
     "A empresa trabalha com ORÇAMENTO (não há preços)."
 )
 
-ATENDENTE_PROMPT = f"""\
-Você é o atendente virtual da Paratec no WhatsApp. {MARCA}
+_ABERTURA = f"Você é o atendente virtual da Paratec no WhatsApp. {MARCA}"
 
+_CADASTRO_BLOCO = """\
 CADASTRO (obrigatório antes de atender): no início da conversa, chame
 verificar_cliente (o número do cliente é automático — NUNCA peça o telefone).
 - Se NÃO for cadastrado: explique cordialmente que, para atender, é preciso um
   cadastro rápido e colete UM campo por vez, de forma natural: razão social,
   CNPJ, e-mail e nome do contato. A cada dado, chame cadastrar_cliente (pode ser
   incremental). Se CNPJ/e-mail vier inválido, peça a correção gentilmente. Só
-  depois do cadastro completo (status 'ativo') prossiga para produtos/pedidos.
-- Se JÁ for cadastrado: cumprimente pelo nome e atenda normalmente.
+  depois do cadastro completo (status 'ativo') prossiga para o atendimento.
+- Se JÁ for cadastrado: cumprimente pelo nome e atenda normalmente."""
 
-PRODUTOS: use as ferramentas de catálogo (buscar_produtos, detalhes_produto,
-buscar_por_sku, listar_categorias, produtos_por_categoria). NUNCA invente
-produtos, códigos ou especificações; se não achar, diga que vai verificar com a
-equipe. Ao citar um produto, informe o(s) SKU(s) e material/dimensão.
+# Cada CAPACIDADE = um grupo de ferramentas + um bloco de instruções. É o que a
+# tela de Agentes liga/desliga por agente (ex.: Financeiro só "boletos").
+CAPACIDADES: dict[str, dict] = {
+    "catalogo": {
+        "label": "Catálogo de produtos",
+        "tools": CATALOG_TOOLS,
+        "bloco": (
+            "PRODUTOS: use as ferramentas de catálogo (buscar_produtos, "
+            "detalhes_produto, buscar_por_sku, listar_categorias, "
+            "produtos_por_categoria). NUNCA invente produtos, códigos ou "
+            "especificações; se não achar, diga que vai verificar com a equipe. "
+            "Ao citar um produto, informe o(s) SKU(s) e material/dimensão."
+        ),
+    },
+    "pedidos": {
+        "label": "Orçamentos / pedidos",
+        "tools": PEDIDOS_TOOLS,
+        "bloco": (
+            "PEDIDOS/ORÇAMENTOS: colete produto/SKU, quantidade e cidade/UF e "
+            "registre com registrar_pedido. Deixe claro que um vendedor dará "
+            "sequência."
+        ),
+    },
+    "entrega": {
+        "label": "Rastreio de entrega",
+        "tools": ENTREGA_TOOLS,
+        "bloco": (
+            "ENTREGA: use consultar_entrega com o número do pedido. Se "
+            "indisponível, explique que um atendente humano dará sequência."
+        ),
+    },
+    "boletos": {
+        "label": "2ª via de boleto",
+        "tools": BOLETOS_TOOLS,
+        "bloco": (
+            "BOLETOS: use segunda_via_boleto. Se indisponível, explique que o "
+            "financeiro/atendente humano dará sequência."
+        ),
+    },
+    "conhecimento": {
+        "label": "Base de conhecimento (SPDA/NBR)",
+        "tools": RAG_TOOLS,
+        "bloco": (
+            "DÚVIDAS TÉCNICAS: use buscar_conhecimento para responder sobre SPDA, "
+            "NBR 5419 e especificações. Baseie-se só no que a base retornar."
+        ),
+    },
+}
+# Ordem estável de exibição/montagem do prompt.
+CAPACIDADES_ORDEM = ["catalogo", "pedidos", "entrega", "boletos", "conhecimento"]
+# Fluxo padrão (número único / instância sem agente configurado) = tudo ligado.
+CAPACIDADES_PADRAO = tuple(CAPACIDADES_ORDEM)
 
-PEDIDOS/ORÇAMENTOS: colete produto/SKU, quantidade e cidade/UF e registre com
-registrar_pedido. Deixe claro que um vendedor dará sequência.
 
-ENTREGA: use consultar_entrega com o número do pedido. Se indisponível, explique
-que um atendente humano dará sequência.
+def _montar_prompt(persona: str | None, capacidades: tuple[str, ...]) -> str:
+    partes = [_ABERTURA]
+    if persona and persona.strip():
+        partes.append(f"PERSONA / FOCO DESTE ATENDIMENTO:\n{persona.strip()}")
+    partes.append(_CADASTRO_BLOCO)
+    for c in CAPACIDADES_ORDEM:
+        if c in capacidades:
+            partes.append(CAPACIDADES[c]["bloco"])
+    return "\n\n".join(partes)
 
-BOLETOS: use segunda_via_boleto. Se indisponível, explique que o financeiro/
-atendente humano dará sequência."""
+
+def _montar_tools(capacidades: tuple[str, ...]) -> list:
+    tools = list(CADASTRO_TOOLS)
+    for c in CAPACIDADES_ORDEM:
+        if c in capacidades:
+            tools += CAPACIDADES[c]["tools"]
+    return tools
+
+
+# Prompt do fluxo padrão (compatível com o comportamento anterior de 1 agente).
+ATENDENTE_PROMPT = _montar_prompt(None, CAPACIDADES_PADRAO)
 
 
 @lru_cache(maxsize=1)
@@ -133,10 +195,40 @@ def _checkpointer():
 
 @lru_cache(maxsize=1)
 def get_app():
-    """Compila o agente único de atendimento (lazy)."""
+    """Compila o agente PADRÃO (fluxo de número único / instância sem agente)."""
     return create_react_agent(
         _llm(), ALL_TOOLS, prompt=ATENDENTE_PROMPT, checkpointer=_checkpointer()
     )
+
+
+@lru_cache(maxsize=16)
+def _build_agent(persona: str | None, capacidades: tuple[str, ...]):
+    """Compila (e memoiza) um react agent para uma persona + conjunto de
+    capacidades. A chave do cache é (persona, capacidades) — ao editar um agente
+    no painel, a nova combinação gera um app novo; a antiga expira pelo LRU."""
+    return create_react_agent(
+        _llm(),
+        _montar_tools(capacidades),
+        prompt=_montar_prompt(persona, capacidades),
+        checkpointer=_checkpointer(),
+    )
+
+
+def _agent_para(instancia: str | None):
+    """Escolhe o app do agente que atende a instância (número). Sem agente
+    configurado para ela, usa o agente padrão (todas as capacidades)."""
+    if not instancia:
+        return get_app()
+    try:
+        cfg = store.get_agent_by_instancia(instancia)
+    except Exception as e:  # pragma: no cover
+        log.warning("falha ao resolver agente da instância %s: %s", instancia, e)
+        cfg = None
+    if not cfg:
+        return get_app()
+    caps = tuple(c for c in CAPACIDADES_ORDEM if c in set(cfg.get("capacidades") or []))
+    persona = (cfg.get("persona") or "").strip() or None
+    return _build_agent(persona, caps)
 
 
 def _extrair_texto(content) -> str:
@@ -226,16 +318,19 @@ def responder(
     thread_id: str,
     cliente: str | None = None,
     telefone: str | None = None,
+    instancia: str | None = None,
 ) -> str:
     """Processa uma mensagem do cliente, PERSISTE o atendimento e devolve o texto.
 
-    `thread_id` mantém o histórico (ex: número do WhatsApp). A persistência é
-    best-effort: uma falha de banco nunca impede a resposta ao cliente.
+    `thread_id` mantém o histórico (ex: número do WhatsApp). `instancia` é o
+    número/instância Evolution por onde a mensagem chegou — define QUAL agente
+    (persona + capacidades) responde. A persistência é best-effort: uma falha de
+    banco nunca impede a resposta ao cliente.
     """
     # Opt-out de promoções por palavra-chave (não aciona o agente/LLM).
     if mensagem.strip().lower() in OPT_OUT_PALAVRAS:
         try:
-            store.upsert_conversation(thread_id, cliente, telefone)
+            store.upsert_conversation(thread_id, cliente, telefone, instancia)
             store.add_message(thread_id, "cliente", mensagem)
             store.set_opt_out(thread_id, True)
             resp = ("Pronto! Você não receberá mais nossas promoções por aqui. "
@@ -248,7 +343,7 @@ def responder(
         return resp
 
     try:
-        store.upsert_conversation(thread_id, cliente, telefone)
+        store.upsert_conversation(thread_id, cliente, telefone, instancia)
         store.add_message(thread_id, "cliente", mensagem)
         store.log_event("mensagem_recebida", thread_id=thread_id)
     except Exception as e:  # pragma: no cover
@@ -269,7 +364,7 @@ def responder(
             pass
         return ""
 
-    result = get_app().invoke(
+    result = _agent_para(instancia).invoke(
         {"messages": [{"role": "user", "content": mensagem}]},
         config={"configurable": {"thread_id": thread_id}},
     )

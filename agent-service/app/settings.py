@@ -27,9 +27,18 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     # Evolution API (envio de WhatsApp de saída pelo painel). Vazio = desabilitado.
+    # A `evolution_api_key` é a chave GLOBAL da Evolution (AUTHENTICATION_API_KEY);
+    # o agent-service a usa como proxy para o painel gerenciar instâncias, de modo
+    # que o admin da Paratec NUNCA precise acessar a Evolution diretamente.
     evolution_api_url: str = ""       # ex: http://evolution-api:8080
     evolution_api_key: str = ""
     evolution_instance: str = "paratec"
+
+    # Webhook para onde a Evolution deve entregar as mensagens das instâncias
+    # criadas pelo painel (normalmente o webhook do N8N que chama o agente).
+    # Vazio = ao conectar um número novo, NÃO configura o webhook automaticamente
+    # (o admin conecta o número, mas o roteamento ao agente é feito à parte).
+    evolution_webhook_url: str = ""
 
     # Intervalo entre envios no broadcast (anti-bloqueio do WhatsApp).
     broadcast_throttle_seconds: float = 4.0

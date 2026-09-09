@@ -65,7 +65,7 @@ def test_responder_envia_e_persiste(monkeypatch):
     monkeypatch.setattr(store, "get_conversation", lambda tid: {"thread_id": tid, "mensagens": []})
     monkeypatch.setattr(store, "add_message", lambda *a, **k: enviados.setdefault("msg", a))
     monkeypatch.setattr(store, "set_status", lambda *a, **k: None)
-    monkeypatch.setattr(evolution, "enviar_texto", lambda tel, txt: enviados.update(tel=tel, txt=txt) or {})
+    monkeypatch.setattr(evolution, "enviar_texto", lambda tel, txt, **k: enviados.update(tel=tel, txt=txt) or {})
     r = client.post("/conversas/5511/responder", json={"texto": "Olá!"})
     assert r.status_code == 200
     assert enviados["tel"] == "5511" and enviados["txt"] == "Olá!"
@@ -74,7 +74,7 @@ def test_responder_envia_e_persiste(monkeypatch):
 def test_responder_503_quando_evolution_off(monkeypatch):
     monkeypatch.setattr(store, "get_conversation", lambda tid: {"thread_id": tid, "mensagens": []})
 
-    def boom(tel, txt):
+    def boom(tel, txt, **k):
         raise evolution.EvolutionError("não configurada")
 
     monkeypatch.setattr(evolution, "enviar_texto", boom)

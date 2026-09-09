@@ -62,6 +62,50 @@ export interface Vendedor {
   updated_at: string;
 }
 
+// --- WhatsApp (conexões / Configurações) ----------------------------------
+
+export type WhatsappEstado = "conectado" | "conectando" | "desconectado";
+
+export interface WhatsappInstancia {
+  nome: string;
+  estado: WhatsappEstado;
+  numero: string | null;
+  perfil: string | null;
+}
+
+export interface WhatsappQrCode {
+  base64: string | null; // data:image/png;base64,... (pronto para <img src>)
+  code: string | null;
+  pairing_code: string | null;
+}
+
+export interface WhatsappConfig {
+  configurado: boolean;
+  webhook_automatico: boolean;
+  instancia_padrao: string;
+}
+
+// --- Agentes (multi-agente por número) ------------------------------------
+
+export type Capacidade = "catalogo" | "pedidos" | "entrega" | "boletos" | "conhecimento";
+
+export interface CapacidadeInfo {
+  chave: Capacidade;
+  label: string;
+}
+
+export interface Agente {
+  id: number;
+  nome: string;
+  descricao: string | null;
+  instancia: string | null; // conexão de WhatsApp (número) amarrada
+  persona: string | null;
+  capacidades: Capacidade[];
+  ativo: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RagStatus {
   enabled: boolean;
   chunks?: number;
