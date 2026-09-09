@@ -168,19 +168,33 @@ export default function AgentesPage() {
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent-soft text-accent-ink">
           <Bot size={16} />
         </span>
-        <p className="text-xs leading-relaxed text-muted">
-          Crie um agente para cada <strong className="text-ink">número de WhatsApp</strong> — por
-          exemplo <strong className="text-ink">Financeiro</strong>,{" "}
-          <strong className="text-ink">Comercial</strong> e{" "}
-          <strong className="text-ink">Logística</strong>. Cada agente tem instruções próprias
-          (persona) e só as <strong className="text-ink">capacidades</strong> que você habilitar.
-          Ao chegar uma mensagem por aquele número, é esse agente que responde. Conecte novos
-          números em{" "}
-          <Link href="/configuracoes" className="font-medium text-accent-ink underline">
-            Configurações
-          </Link>
-          .
-        </p>
+        <div className="space-y-2 text-xs leading-relaxed text-muted">
+          <p>
+            Cada agente tem instruções próprias (<strong className="text-ink">persona</strong>) e só
+            as <strong className="text-ink">capacidades</strong> que você habilitar (catálogo,
+            orçamentos, entregas, boletos, conhecimento). O cadastro do cliente é sempre solicitado
+            antes do atendimento.
+          </p>
+          <p>
+            <strong className="text-ink">Agente padrão:</strong> o card marcado como{" "}
+            <span className="font-medium text-accent-ink">Padrão</span> atende{" "}
+            <strong className="text-ink">todos os números que não têm um agente próprio</strong>.
+            Edite o prompt dele aqui para evoluir o atendimento geral — sem precisar de publicação.
+            Ele não é removido nem amarrado a um número.
+          </p>
+          <p>
+            <strong className="text-ink">Agentes por número:</strong> crie um agente (ex.:{" "}
+            <strong className="text-ink">Financeiro</strong>,{" "}
+            <strong className="text-ink">Comercial</strong>,{" "}
+            <strong className="text-ink">Logística</strong>) e amarre a uma{" "}
+            <strong className="text-ink">conexão de WhatsApp</strong> para especializar aquele
+            número. Um número só pode ter um agente. Conecte novos números em{" "}
+            <Link href="/configuracoes" className="font-medium text-accent-ink underline">
+              Configurações
+            </Link>
+            .
+          </p>
+        </div>
       </Card>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
