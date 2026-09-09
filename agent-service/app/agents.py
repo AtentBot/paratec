@@ -8,12 +8,13 @@ gerando 400 INVALID_ARGUMENT. O agente único evita isso e é mais rápido
 (menos chamadas ao LLM por mensagem).
 """
 import logging
+import threading
 from functools import lru_cache
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 
-from . import store
+from . import evolution, store
 from .settings import settings
 from .tools import (
     BOLETOS_TOOLS,
@@ -159,6 +160,47 @@ def _extrair_texto(content) -> str:
     return str(content)
 
 
+def _notificar_vendedores(
+    cliente: str | None, telefone: str | None, resumos: list[str]
+) -> None:
+    """Alerta (WhatsApp) TODOS os vendedores ativos sobre um novo orçamento.
+
+    Distribuição "primeiro que pegar assume": o alerta vai para toda a equipe;
+    quem entrar no painel e assumir a conversa primeiro fica com ela. O envio
+    roda em thread separada (daemon) para NÃO atrasar a resposta ao cliente, e
+    é best-effort: uma falha da Evolution nunca quebra o atendimento.
+    """
+    if not settings.evolution_configured:
+        return
+    try:
+        vendedores = store.list_sellers(only_ativo=True)
+    except Exception as e:  # pragma: no cover
+        log.warning("não foi possível listar vendedores p/ alerta: %s", e)
+        return
+    if not vendedores:
+        return
+
+    nome_cli = cliente or telefone or "cliente"
+    resumo = "; ".join(r for r in resumos if r) or "novo pedido de orçamento"
+    texto = (
+        "🔔 *Novo orçamento — Paratec*\n\n"
+        f"Cliente: {nome_cli}\n"
+        f"WhatsApp: {telefone or '—'}\n"
+        f"Resumo: {resumo}\n\n"
+        "Entre no painel para assumir a conversa (quem pegar primeiro assume):\n"
+        f"{settings.panel_url.rstrip('/')}/conversas"
+    )
+
+    def _run() -> None:
+        for v in vendedores:
+            try:
+                evolution.enviar_texto(v["telefone"], texto)
+            except Exception as e:  # pragma: no cover
+                log.warning("alerta ao vendedor %s falhou: %s", v.get("telefone"), e)
+
+    threading.Thread(target=_run, name="alerta-vendedores", daemon=True).start()
+
+
 def _analisar(messages) -> dict:
     """Extrai do resultado: especialista (inferido pela ferramenta usada) e
     intenções de fila (chamadas às ferramentas de handoff, com o resumo)."""
@@ -253,6 +295,13 @@ def responder(
         cust = store.get_customer(thread_id)
         if cust and cust.get("razao_social"):
             store.upsert_conversation(thread_id, cliente=cust["razao_social"])
+        # Alerta a equipe de vendas: novo orçamento aguardando atendimento humano
+        # (só quando há pedido de orçamento na fila). Não bloqueia a resposta.
+        pedidos = [resumo for tipo, resumo in info["filas"] if tipo == "pedido"]
+        if pedidos:
+            nome_cli = (cust or {}).get("razao_social") or cliente
+            _notificar_vendedores(nome_cli, telefone or thread_id, pedidos)
+            store.log_event("alerta_vendedor", thread_id=thread_id, especialista=routed)
     except Exception as e:  # pragma: no cover
         log.warning("persistência (saída) falhou: %s", e)
 

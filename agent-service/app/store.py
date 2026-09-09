@@ -498,6 +498,64 @@ def update_queue_item(
     return rows[0] if rows else None
 
 
+# --- Equipe de vendas (vendedores) ---------------------------------------
+
+_SELLER_COLS = "id, nome, telefone, email, ativo, created_at, updated_at"
+
+
+def list_sellers(only_ativo: bool = False) -> list[dict]:
+    where = "WHERE ativo = true" if only_ativo else ""
+    return query(f"SELECT {_SELLER_COLS} FROM sellers {where} ORDER BY nome")
+
+
+def get_seller(seller_id: int) -> dict | None:
+    rows = query(f"SELECT {_SELLER_COLS} FROM sellers WHERE id = %s", (seller_id,))
+    return rows[0] if rows else None
+
+
+def create_seller(
+    nome: str, telefone: str, email: str | None = None, ativo: bool = True
+) -> dict:
+    rows = execute(
+        f"""INSERT INTO sellers (nome, telefone, email, ativo)
+             VALUES (%s, %s, %s, %s) RETURNING {_SELLER_COLS}""",
+        (nome, telefone, email, ativo),
+        returning=True,
+    )
+    return rows[0]
+
+
+def update_seller(
+    seller_id: int,
+    nome: str | None = None,
+    telefone: str | None = None,
+    email: str | None = None,
+    ativo: bool | None = None,
+) -> dict | None:
+    rows = execute(
+        f"""
+        UPDATE sellers SET
+            nome     = COALESCE(%s, nome),
+            telefone = COALESCE(%s, telefone),
+            email    = COALESCE(%s, email),
+            ativo    = COALESCE(%s, ativo),
+            updated_at = now()
+         WHERE id = %s
+        RETURNING {_SELLER_COLS}
+        """,
+        (nome, telefone, email, ativo, seller_id),
+        returning=True,
+    )
+    return rows[0] if rows else None
+
+
+def delete_seller(seller_id: int) -> bool:
+    rows = execute(
+        "DELETE FROM sellers WHERE id = %s RETURNING id", (seller_id,), returning=True
+    )
+    return bool(rows)
+
+
 # --- Métricas (dashboard) -------------------------------------------------
 
 def metrics_overview() -> dict:

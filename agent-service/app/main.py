@@ -113,6 +113,20 @@ class BotRequest(BaseModel):
     ativo: bool
 
 
+class VendedorCreate(BaseModel):
+    nome: str
+    telefone: str
+    email: str | None = None
+    ativo: bool = True
+
+
+class VendedorUpdate(BaseModel):
+    nome: str | None = None
+    telefone: str | None = None
+    email: str | None = None
+    ativo: bool | None = None
+
+
 @app.get("/health")
 def health():
     try:
@@ -276,6 +290,44 @@ def cliente(telefone: str):
     if c is None:
         raise HTTPException(status_code=404, detail="cliente não encontrado")
     return c
+
+
+# --- Equipe de vendas (tela adm) -------------------------------------------
+
+@app.get("/vendedores")
+def vendedores(ativo: bool | None = None):
+    return store.list_sellers(only_ativo=bool(ativo))
+
+
+@app.post("/vendedores")
+def vendedor_criar(req: VendedorCreate):
+    nome = req.nome.strip()
+    telefone = "".join(ch for ch in req.telefone if ch.isdigit())
+    if not nome:
+        raise HTTPException(status_code=422, detail="informe o nome do vendedor")
+    if len(telefone) < 10:
+        raise HTTPException(status_code=422, detail="WhatsApp inválido (use DDD + número)")
+    return store.create_seller(nome, telefone, req.email, req.ativo)
+
+
+@app.patch("/vendedores/{seller_id}")
+def vendedor_atualizar(seller_id: int, req: VendedorUpdate):
+    telefone = req.telefone
+    if telefone is not None:
+        telefone = "".join(ch for ch in telefone if ch.isdigit())
+        if len(telefone) < 10:
+            raise HTTPException(status_code=422, detail="WhatsApp inválido (use DDD + número)")
+    v = store.update_seller(seller_id, req.nome, telefone, req.email, req.ativo)
+    if v is None:
+        raise HTTPException(status_code=404, detail="vendedor não encontrado")
+    return v
+
+
+@app.delete("/vendedores/{seller_id}")
+def vendedor_remover(seller_id: int):
+    if not store.delete_seller(seller_id):
+        raise HTTPException(status_code=404, detail="vendedor não encontrado")
+    return {"removido": seller_id}
 
 
 # --- Fila humana (tela adm) ------------------------------------------------

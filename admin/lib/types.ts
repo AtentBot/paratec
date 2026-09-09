@@ -50,6 +50,18 @@ export interface Cliente {
   updated_at: string;
 }
 
+// --- Equipe de vendas -----------------------------------------------------
+
+export interface Vendedor {
+  id: number;
+  nome: string;
+  telefone: string;
+  email: string | null;
+  ativo: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RagStatus {
   enabled: boolean;
   chunks?: number;

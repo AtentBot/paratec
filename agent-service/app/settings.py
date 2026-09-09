@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Intervalo entre envios no broadcast (anti-bloqueio do WhatsApp).
     broadcast_throttle_seconds: float = 4.0
 
+    # URL pública do painel adm (usada no link dos alertas aos vendedores).
+    panel_url: str = "https://paratec.atentbot.com"
+
     # Diretório dos banners/imagens de promoções (servidos em /media). Vazio =
     # <agent-service>/media. Aponte para um volume Docker para persistir.
     media_dir: str = ""

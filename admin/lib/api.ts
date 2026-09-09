@@ -13,6 +13,7 @@ import type {
   RagFonte,
   RagStatus,
   RelatorioResumo,
+  Vendedor,
 } from "./types";
 
 // No NAVEGADOR: same-origin "/agent" (o Next faz proxy p/ o agent-service
@@ -178,6 +179,22 @@ export const api = {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     return `${BASE}/fila.csv${qs ? `?${qs}` : ""}`;
   },
+
+  // Equipe de vendas (vendedores)
+  vendedores: (ativo?: boolean) =>
+    get<Vendedor[]>(`/vendedores${ativo ? "?ativo=true" : ""}`),
+  criarVendedor: (body: {
+    nome: string;
+    telefone: string;
+    email?: string | null;
+    ativo?: boolean;
+  }) => send<Vendedor>("POST", "/vendedores", body),
+  atualizarVendedor: (
+    id: number,
+    body: { nome?: string; telefone?: string; email?: string | null; ativo?: boolean },
+  ) => send<Vendedor>("PATCH", `/vendedores/${id}`, body),
+  removerVendedor: (id: number) =>
+    send<{ removido: number }>("DELETE", `/vendedores/${id}`),
 
   // Fila humana
   fila: (params: { tipo?: string; status?: string } = {}) => {

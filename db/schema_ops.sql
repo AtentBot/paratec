@@ -131,3 +131,21 @@ CREATE TABLE IF NOT EXISTS queue_items (
 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue_items(status);
 CREATE INDEX IF NOT EXISTS idx_queue_tipo   ON queue_items(tipo);
 CREATE INDEX IF NOT EXISTS idx_queue_created ON queue_items(created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Equipe de vendas (vendedores humanos que recebem alertas de handoff)
+-- Quando o agente registra um orçamento (queue_items tipo 'pedido'), os
+-- vendedores ATIVOS recebem um alerta no WhatsApp para assumir a conversa.
+-- telefone: número no formato aceito pela Evolution (ex: 5511999998888).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sellers (
+    id          BIGSERIAL PRIMARY KEY,
+    nome        TEXT NOT NULL,
+    telefone    TEXT NOT NULL,
+    email       TEXT,
+    ativo       BOOLEAN NOT NULL DEFAULT true,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sellers_ativo ON sellers(ativo);
