@@ -103,6 +103,8 @@ export const api = {
 
   // Métricas
   metrics: () => get<Metrics>("/metrics/overview"),
+  // Total de não-lidas (badge global do menu Atendimento).
+  unreadTotal: () => get<{ total: number }>("/metrics/unread"),
 
   // Conversas / Atendimento
   conversas: (params: { status?: string; q?: string } = {}) => {

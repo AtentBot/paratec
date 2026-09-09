@@ -387,6 +387,12 @@ def list_conversations(
     )
 
 
+def unread_total() -> int:
+    """Soma de mensagens não-lidas em todas as conversas (indicador global)."""
+    rows = query("SELECT COALESCE(SUM(unread), 0) AS n FROM conversations")
+    return int(rows[0]["n"]) if rows else 0
+
+
 def get_conversation(thread_id: str) -> dict | None:
     rows = query(
         """SELECT thread_id, cliente, telefone, instancia, status, especialista, unread,

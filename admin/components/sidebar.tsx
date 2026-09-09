@@ -1,5 +1,6 @@
 "use client";
 
+import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import {
   LayoutDashboard,
@@ -13,11 +14,14 @@ import {
   FileBarChart,
   BookOpen,
   Bot,
+  Bell,
+  BellOff,
   Settings,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 type NavItem = {
   href: string;
@@ -72,8 +76,80 @@ function NavLink({ item, path }: { item: NavItem; path: string }) {
   );
 }
 
+// Bipe curto (WebAudio) — sem depender de arquivo de áudio.
+function beep() {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.26);
+    osc.onended = () => ctx.close();
+  } catch {
+    /* áudio bloqueado pelo navegador — ignora */
+  }
+}
+
 export function Sidebar() {
   const path = usePathname();
+
+  // Indicador global de não-lidas (badge no menu Atendimento) + som opcional.
+  const [unread, setUnread] = useState(0);
+  const [som, setSom] = useState(false);
+  const somRef = useRef(false);
+  const prevUnread = useRef<number | null>(null);
+
+  useEffect(() => {
+    try {
+      const on = localStorage.getItem("paratec_som_msg") === "1";
+      setSom(on);
+      somRef.current = on;
+    } catch {
+      /* localStorage indisponível */
+    }
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const { total } = await api.unreadTotal();
+        if (!alive) return;
+        if (prevUnread.current !== null && total > prevUnread.current && somRef.current) {
+          beep();
+        }
+        prevUnread.current = total;
+        setUnread(total);
+      } catch {
+        /* backend fora do ar — mantém o valor atual */
+      }
+    };
+    tick();
+    const id = setInterval(tick, 15000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  function toggleSom() {
+    const novo = !som;
+    setSom(novo);
+    somRef.current = novo;
+    try {
+      localStorage.setItem("paratec_som_msg", novo ? "1" : "0");
+    } catch {
+      /* localStorage indisponível */
+    }
+    if (novo) beep(); // toca uma vez p/ "destravar" o áudio no navegador
+  }
 
   return (
     <aside className="sticky top-0 flex h-dvh w-[248px] shrink-0 flex-col border-r bg-surface">
@@ -92,7 +168,11 @@ export function Sidebar() {
           Operação
         </p>
         {NAV.map((item) => (
-          <NavLink key={item.href} item={item} path={path} />
+          <NavLink
+            key={item.href}
+            item={item.href === "/conversas" ? { ...item, badge: unread || undefined } : item}
+            path={path}
+          />
         ))}
 
         <p className="px-3 pb-1 pt-5 text-[10px] font-semibold uppercase tracking-wider text-faint">
@@ -104,6 +184,22 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t px-4 py-3">
+        <button
+          onClick={toggleSom}
+          title={som ? "Som de novas mensagens: ligado" : "Som de novas mensagens: desligado"}
+          className="mb-1 flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-[11px] font-medium text-muted transition hover:bg-surface-2 hover:text-ink"
+        >
+          {som ? <Bell size={15} className="text-accent-ink" /> : <BellOff size={15} className="text-faint" />}
+          <span className="flex-1 text-left">Som de novas mensagens</span>
+          <span
+            className={cn(
+              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+              som ? "bg-accent-soft text-accent-ink" : "bg-surface-2 text-faint",
+            )}
+          >
+            {som ? "ON" : "OFF"}
+          </span>
+        </button>
         <div className="flex items-center gap-3 rounded-lg px-2 py-2">
           <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-xs font-semibold text-accent-ink">
             DB

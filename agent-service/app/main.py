@@ -551,6 +551,12 @@ def metrics_overview():
     return store.metrics_overview()
 
 
+@app.get("/metrics/unread")
+def metrics_unread():
+    """Total de não-lidas (badge global do menu Atendimento)."""
+    return {"total": store.unread_total()}
+
+
 # --- Exportações CSV -------------------------------------------------------
 
 def _csv(filename: str, colunas: list[str], linhas: list[dict]) -> Response:
