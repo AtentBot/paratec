@@ -2,10 +2,13 @@
 ambiente (PGHOST/...); se o banco não estiver acessível, são PULADOS —
 assim a suíte roda em qualquer lugar e fica completa quando há DB."""
 import os
+import tempfile
 
 import pytest
 
 os.environ.setdefault("GOOGLE_API_KEY", "dummy-tests")
+# Banners de promoção vão para um tempdir nos testes (não polui o repo).
+os.environ.setdefault("MEDIA_DIR", tempfile.mkdtemp(prefix="paratec-media-tests-"))
 
 
 def _db_disponivel() -> bool:

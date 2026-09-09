@@ -43,6 +43,36 @@ def test_fila_criacao_e_atualizacao(db):
 
 
 @requires_db
+def test_customers_por_telefones_filtra_elegiveis(db):
+    # ativo elegível
+    db.upsert_customer("5599001", razao_social="A", cnpj="1", email="a@a", nome_contato="A")
+    # ativo, mas com opt-out
+    db.upsert_customer("5599002", razao_social="B", cnpj="2", email="b@b", nome_contato="B")
+    db.set_opt_out("5599002", True)
+    # cadastro pendente (faltam campos -> status 'pendente')
+    db.upsert_customer("5599003", razao_social="C")
+
+    sel = db.customers_por_telefones(
+        ["5599001", "5599002", "5599003", "5599999"]  # último nem existe
+    )
+    assert {c["telefone"] for c in sel} == {"5599001"}
+    assert db.customers_por_telefones([]) == []
+
+
+@requires_db
+def test_broadcast_grava_e_lista_imagem(db):
+    bid = db.create_broadcast("Promo", 3, "tester", "/media/banner.png")
+    assert isinstance(bid, int)
+    b = db.list_broadcasts()[0]
+    assert b["texto"] == "Promo" and b["total"] == 3
+    assert b["imagem"] == "/media/banner.png"
+
+    # campanha só de texto: imagem NULL
+    db.create_broadcast("Só texto", 1)
+    assert db.list_broadcasts()[0]["imagem"] is None
+
+
+@requires_db
 def test_metricas_agregam_eventos(db):
     db.upsert_conversation("m1")
     db.log_event("mensagem_recebida", thread_id="m1")
