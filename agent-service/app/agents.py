@@ -215,16 +215,20 @@ def _build_agent(persona: str | None, capacidades: tuple[str, ...]):
 
 
 def _agent_para(instancia: str | None):
-    """Escolhe o app do agente que atende a instância (número). Sem agente
-    configurado para ela, usa o agente padrão (todas as capacidades)."""
-    if not instancia:
-        return get_app()
+    """Escolhe o app do agente que atende a instância (número).
+
+    Ordem: agente amarrado ao número → agente PADRÃO do banco (editável na tela
+    de Agentes) → agente hardcoded (get_app), só se não houver padrão no banco."""
+    cfg = None
     try:
-        cfg = store.get_agent_by_instancia(instancia)
+        if instancia:
+            cfg = store.get_agent_by_instancia(instancia)
+        if cfg is None:
+            cfg = store.get_default_agent()
     except Exception as e:  # pragma: no cover
         log.warning("falha ao resolver agente da instância %s: %s", instancia, e)
         cfg = None
-    if not cfg:
+    if not cfg or not cfg.get("ativo"):
         return get_app()
     caps = tuple(c for c in CAPACIDADES_ORDEM if c in set(cfg.get("capacidades") or []))
     persona = (cfg.get("persona") or "").strip() or None

@@ -157,6 +157,8 @@ export default function AgentesPage() {
   }
 
   const podeSalvar = form.nome.trim().length > 1;
+  // O agente padrão (catch-all) não amarra número e não pode ser removido.
+  const editandoPadrao = editId !== null && !!lista.find((a) => a.id === editId)?.is_default;
 
   return (
     <div className="flex flex-col gap-4 animate-fade-in">
@@ -215,29 +217,38 @@ export default function AgentesPage() {
                 value={form.nome}
                 onChange={(e) => setForm({ ...form, nome: e.target.value })}
                 placeholder="Ex.: Financeiro"
-                className={inputCls}
+                disabled={editandoPadrao}
+                className={cn(inputCls, editandoPadrao && "opacity-60")}
               />
             </Campo>
-            <Campo label="Conexão de WhatsApp (número)">
-              <select
-                value={form.instancia}
-                onChange={(e) => setForm({ ...form, instancia: e.target.value })}
-                className={inputCls}
-              >
-                <option value="">— sem número amarrado —</option>
-                {conexoes.map((c) => {
-                  const dono = usadas.get(c.nome);
-                  const emUso = dono != null && dono !== editId;
-                  return (
-                    <option key={c.nome} value={c.nome} disabled={emUso}>
-                      {c.nome}
-                      {c.numero ? ` (+${c.numero})` : ""}
-                      {emUso ? " — em uso" : ""}
-                    </option>
-                  );
-                })}
-              </select>
-            </Campo>
+            {editandoPadrao ? (
+              <Campo label="Conexão de WhatsApp">
+                <div className="flex h-[38px] items-center rounded-lg border bg-surface-2 px-3 text-xs text-muted">
+                  Atende todos os números sem agente próprio (catch-all).
+                </div>
+              </Campo>
+            ) : (
+              <Campo label="Conexão de WhatsApp (número)">
+                <select
+                  value={form.instancia}
+                  onChange={(e) => setForm({ ...form, instancia: e.target.value })}
+                  className={inputCls}
+                >
+                  <option value="">— sem número amarrado —</option>
+                  {conexoes.map((c) => {
+                    const dono = usadas.get(c.nome);
+                    const emUso = dono != null && dono !== editId;
+                    return (
+                      <option key={c.nome} value={c.nome} disabled={emUso}>
+                        {c.nome}
+                        {c.numero ? ` (+${c.numero})` : ""}
+                        {emUso ? " — em uso" : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              </Campo>
+            )}
           </div>
 
           <div className="mt-3">
@@ -283,11 +294,21 @@ export default function AgentesPage() {
               <textarea
                 value={form.persona}
                 onChange={(e) => setForm({ ...form, persona: e.target.value })}
-                placeholder="Ex.: Você é o atendimento financeiro. Foque em 2ª via de boleto e pagamentos; para dúvidas comerciais, oriente a procurar o número comercial."
-                rows={3}
+                placeholder={
+                  editandoPadrao
+                    ? "Instruções gerais do atendimento. Deixe em branco para usar o prompt base padrão."
+                    : "Ex.: Você é o atendimento financeiro. Foque em 2ª via de boleto e pagamentos; para dúvidas comerciais, oriente a procurar o número comercial."
+                }
+                rows={editandoPadrao ? 5 : 3}
                 className={cn(inputCls, "resize-y")}
               />
             </Campo>
+            {editandoPadrao && (
+              <p className="mt-1.5 text-[11px] text-faint">
+                Este é o atendimento aplicado a qualquer número sem agente próprio. Ajuste o texto e
+                as capacidades para evoluir o comportamento padrão.
+              </p>
+            )}
           </div>
 
           {erro && <p className="mt-3 text-xs text-danger">{erro}</p>}
@@ -339,9 +360,15 @@ export default function AgentesPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="truncate text-sm font-semibold text-ink">{a.nome}</p>
-                    <Badge tone={a.ativo ? "success" : "neutral"} dot>
-                      {a.ativo ? "Ativo" : "Inativo"}
-                    </Badge>
+                    {a.is_default ? (
+                      <Badge tone="accent" dot>
+                        Padrão
+                      </Badge>
+                    ) : (
+                      <Badge tone={a.ativo ? "success" : "neutral"} dot>
+                        {a.ativo ? "Ativo" : "Inativo"}
+                      </Badge>
+                    )}
                   </div>
                   {a.descricao && (
                     <p className="mt-0.5 truncate text-[11px] text-muted">{a.descricao}</p>
@@ -351,7 +378,11 @@ export default function AgentesPage() {
 
               <div className="mt-3 flex items-center gap-1.5 border-t pt-3 text-xs">
                 <Smartphone size={13} className="shrink-0 text-faint" />
-                {a.instancia ? (
+                {a.is_default ? (
+                  <span className="min-w-0 flex-1 truncate text-muted">
+                    Todos os números sem agente próprio
+                  </span>
+                ) : a.instancia ? (
                   <span className="min-w-0 flex-1 truncate text-ink">{a.instancia}</span>
                 ) : (
                   <span className="flex items-center gap-1 text-warning">
@@ -376,24 +407,28 @@ export default function AgentesPage() {
               )}
 
               <div className="mt-auto flex items-center gap-1.5 border-t pt-3">
-                <button
-                  onClick={() => toggleAtivo(a)}
-                  className="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:bg-surface-2 hover:text-ink"
-                >
-                  {a.ativo ? "Desativar" : "Ativar"}
-                </button>
+                {!a.is_default && (
+                  <button
+                    onClick={() => toggleAtivo(a)}
+                    className="rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:bg-surface-2 hover:text-ink"
+                  >
+                    {a.ativo ? "Desativar" : "Ativar"}
+                  </button>
+                )}
                 <button
                   onClick={() => editar(a)}
                   className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:bg-surface-2 hover:text-ink"
                 >
-                  <Pencil size={12} /> Editar
+                  <Pencil size={12} /> {a.is_default ? "Editar prompt" : "Editar"}
                 </button>
-                <button
-                  onClick={() => remover(a)}
-                  className="ml-auto inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:bg-danger/10 hover:text-danger"
-                >
-                  <Trash2 size={12} /> Remover
-                </button>
+                {!a.is_default && (
+                  <button
+                    onClick={() => remover(a)}
+                    className="ml-auto inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:bg-danger/10 hover:text-danger"
+                  >
+                    <Trash2 size={12} /> Remover
+                  </button>
+                )}
               </div>
               <p className="mt-2 text-[10px] text-faint">atualizado {relativo(a.updated_at)}</p>
             </Card>

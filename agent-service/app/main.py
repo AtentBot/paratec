@@ -482,10 +482,17 @@ def agente_criar(req: AgenteCreate):
 
 @app.patch("/agentes/{agent_id}")
 def agente_atualizar(agent_id: int, req: AgenteUpdate):
+    atual = store.get_agent(agent_id)
+    if atual is None:
+        raise HTTPException(status_code=404, detail="agente não encontrado")
     caps = _validar_capacidades(req.capacidades) if req.capacidades is not None else None
     # "instancia": "" (string vazia) = desamarrar o número; ausente = manter.
     limpar = req.instancia is not None and (req.instancia or "").strip() == ""
     inst = (req.instancia or "").strip() or None
+    # O agente PADRÃO é o catch-all: nunca fica amarrado a um número específico.
+    if atual.get("is_default"):
+        inst = None
+        limpar = False
     if inst:
         outro = store.get_agent_by_instancia(inst)
         if outro and outro["id"] != agent_id:
@@ -512,6 +519,11 @@ def agente_atualizar(agent_id: int, req: AgenteUpdate):
 
 @app.delete("/agentes/{agent_id}")
 def agente_remover(agent_id: int):
+    atual = store.get_agent(agent_id)
+    if atual is None:
+        raise HTTPException(status_code=404, detail="agente não encontrado")
+    if atual.get("is_default"):
+        raise HTTPException(status_code=400, detail="o agente padrão não pode ser removido")
     if not store.delete_agent(agent_id):
         raise HTTPException(status_code=404, detail="agente não encontrado")
     return {"removido": agent_id}

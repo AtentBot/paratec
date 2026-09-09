@@ -180,3 +180,19 @@ CREATE TABLE IF NOT EXISTS agents (
 -- parcial: permite vários agentes SEM instância amarrada (rascunhos).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_instancia
     ON agents(instancia) WHERE instancia IS NOT NULL;
+
+-- Agente PADRÃO (catch-all): atende todo número que não tem agente próprio.
+-- É editável pelo analista (persona/capacidades) mas não pode ser removido nem
+-- amarrado a um número. Só pode haver um (índice único parcial).
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_default ON agents(is_default) WHERE is_default;
+
+-- Semeia o agente padrão (idempotente): persona vazia + todas as capacidades =
+-- reproduz o prompt base histórico (ATENDENTE_PROMPT). Só insere se ainda não há.
+INSERT INTO agents (nome, descricao, persona, capacidades, ativo, is_default)
+SELECT 'Agente padrão',
+       'Atende todos os números que não têm um agente próprio.',
+       NULL,
+       ARRAY['catalogo','pedidos','entrega','boletos','conhecimento'],
+       true, true
+WHERE NOT EXISTS (SELECT 1 FROM agents WHERE is_default);

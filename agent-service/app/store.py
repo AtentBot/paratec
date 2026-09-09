@@ -561,12 +561,19 @@ def delete_seller(seller_id: int) -> bool:
 # --- Agentes (multi-agente por número de WhatsApp) ------------------------
 
 _AGENT_COLS = (
-    "id, nome, descricao, instancia, persona, capacidades, ativo, created_at, updated_at"
+    "id, nome, descricao, instancia, persona, capacidades, ativo, is_default, "
+    "created_at, updated_at"
 )
 
 
 def list_agents() -> list[dict]:
-    return query(f"SELECT {_AGENT_COLS} FROM agents ORDER BY nome")
+    # Padrão sempre primeiro; demais por nome.
+    return query(f"SELECT {_AGENT_COLS} FROM agents ORDER BY is_default DESC, nome")
+
+
+def get_default_agent() -> dict | None:
+    rows = query(f"SELECT {_AGENT_COLS} FROM agents WHERE is_default LIMIT 1")
+    return rows[0] if rows else None
 
 
 def get_agent(agent_id: int) -> dict | None:

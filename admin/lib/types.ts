@@ -102,6 +102,7 @@ export interface Agente {
   persona: string | null;
   capacidades: Capacidade[];
   ativo: boolean;
+  is_default: boolean; // agente catch-all (atende números sem agente próprio)
   created_at: string;
   updated_at: string;
 }
