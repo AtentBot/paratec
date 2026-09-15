@@ -1,10 +1,13 @@
 "use client";
 
 import { Restrito } from "@/components/restrito";
+import { Busca, Carregando, Pager } from "@/components/admin-ui";
 import { api } from "@/lib/api";
 import type { AdminTenant } from "@/lib/types";
 import { Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
+
+const LIMIT = 25;
 
 const SUB_STATUS: Record<string, { label: string; cls: string }> = {
   active: { label: "Ativa", cls: "bg-surface-2 text-success" },
@@ -23,23 +26,33 @@ function data(iso: string | null) {
 
 export default function AdminAssinaturas() {
   const [rows, setRows] = useState<AdminTenant[] | null>(null);
+  const [total, setTotal] = useState(0);
   const [restrito, setRestrito] = useState(false);
   const [edit, setEdit] = useState<AdminTenant | null>(null);
+  const [q, setQ] = useState("");
+  const [offset, setOffset] = useState(0);
 
   async function carregar() {
     try {
-      setRows(await api.adminTenants());
+      const r = await api.adminTenants({ q: q || undefined, limit: LIMIT, offset });
+      setRows(r.items);
+      setTotal(r.total);
     } catch {
       setRestrito(true);
     }
   }
-  useEffect(() => { carregar(); }, []);
+  useEffect(() => {
+    const t = setTimeout(carregar, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line
+  }, [q, offset]);
 
   if (restrito) return <Restrito />;
-  if (!rows) return <div className="flex items-center gap-2 text-muted"><Loader2 size={16} className="animate-spin" /> Carregando…</div>;
 
   return (
     <div className="flex flex-col gap-4 animate-fade-in">
+      <Busca q={q} onChange={(v) => { setQ(v); setOffset(0); }} placeholder="Buscar cliente…" />
+      {!rows ? <Carregando /> : (<>
       <div className="overflow-x-auto rounded-2xl border bg-surface shadow-card">
         <table className="w-full min-w-[720px] text-sm">
           <thead>
@@ -81,6 +94,8 @@ export default function AdminAssinaturas() {
           </tbody>
         </table>
       </div>
+      <Pager offset={offset} limit={LIMIT} count={rows.length} total={total} onChange={setOffset} />
+      </>)}
 
       {edit && <EditarAssinatura t={edit} onClose={() => setEdit(null)} onDone={carregar} />}
     </div>

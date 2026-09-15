@@ -422,8 +422,11 @@ def admin_overview(admin: TenantCtx = Depends(current_admin)):
 
 
 @app.get("/admin/tenants")
-def admin_tenants(admin: TenantCtx = Depends(current_admin)):
-    return store.admin_list_tenants()
+def admin_tenants(q: str | None = None,
+                  limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0),
+                  admin: TenantCtx = Depends(current_admin)):
+    return {"items": store.admin_list_tenants(q, limit, offset),
+            "total": store.admin_count_tenants(q)}
 
 
 @app.patch("/admin/tenants/{tenant_id}/assinatura")
@@ -439,14 +442,20 @@ def admin_set_sub(tenant_id: int, req: AdminSubReq,
 
 
 @app.get("/admin/consumo")
-def admin_consumo(admin: TenantCtx = Depends(current_admin)):
-    return store.admin_usage_por_tenant()
+def admin_consumo(q: str | None = None,
+                  limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0),
+                  admin: TenantCtx = Depends(current_admin)):
+    return {"items": store.admin_usage_por_tenant(q, limit, offset),
+            "totais": store.admin_usage_totais(q)}
 
 
 @app.get("/admin/chamados")
 def admin_chamados(status: str | None = None, prioridade: str | None = None,
+                   q: str | None = None,
+                   limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0),
                    admin: TenantCtx = Depends(current_admin)):
-    return store.admin_list_tickets(status, prioridade)
+    return {"items": store.admin_list_tickets(status, prioridade, q, limit, offset),
+            "total": store.admin_count_tickets(status, prioridade, q)}
 
 
 @app.get("/admin/chamados/{ticket_id}")

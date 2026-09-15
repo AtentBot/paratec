@@ -1,10 +1,13 @@
 "use client";
 
 import { Restrito } from "@/components/restrito";
+import { Busca, Pager } from "@/components/admin-ui";
 import { api } from "@/lib/api";
 import type { AdminTicketDetalhe, AdminTicketResumo } from "@/lib/types";
 import { Loader2, Send, X } from "lucide-react";
 import { useEffect, useState } from "react";
+
+const LIMIT = 25;
 
 const CAT: Record<string, string> = {
   duvida: "Dúvida", problema_tecnico: "Problema técnico", cobranca: "Cobrança",
@@ -28,31 +31,44 @@ function quando(iso: string) {
 
 export default function AdminChamados() {
   const [rows, setRows] = useState<AdminTicketResumo[] | null>(null);
+  const [total, setTotal] = useState(0);
   const [restrito, setRestrito] = useState(false);
   const [fStatus, setFStatus] = useState("");
   const [fPrio, setFPrio] = useState("");
+  const [q, setQ] = useState("");
+  const [offset, setOffset] = useState(0);
   const [sel, setSel] = useState<number | null>(null);
 
   async function carregar() {
     try {
-      setRows(await api.adminChamados({ status: fStatus || undefined, prioridade: fPrio || undefined }));
+      const r = await api.adminChamados({
+        status: fStatus || undefined, prioridade: fPrio || undefined,
+        q: q || undefined, limit: LIMIT, offset,
+      });
+      setRows(r.items);
+      setTotal(r.total);
     } catch {
       setRestrito(true);
     }
   }
-  useEffect(() => { carregar(); /* eslint-disable-next-line */ }, [fStatus, fPrio]);
+  useEffect(() => {
+    const t = setTimeout(carregar, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line
+  }, [fStatus, fPrio, q, offset]);
 
   if (restrito) return <Restrito />;
 
   return (
     <div className="flex flex-col gap-4 animate-fade-in">
-      <div className="flex flex-wrap gap-2">
-        <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}
+      <div className="flex flex-wrap items-center gap-2">
+        <Busca q={q} onChange={(v) => { setQ(v); setOffset(0); }} placeholder="Buscar cliente ou assunto…" />
+        <select value={fStatus} onChange={(e) => { setFStatus(e.target.value); setOffset(0); }}
           className="rounded-lg border bg-surface px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent/40">
           <option value="">Todos os status</option>
           {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
-        <select value={fPrio} onChange={(e) => setFPrio(e.target.value)}
+        <select value={fPrio} onChange={(e) => { setFPrio(e.target.value); setOffset(0); }}
           className="rounded-lg border bg-surface px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent/40">
           <option value="">Todas as prioridades</option>
           {Object.entries(PRIO).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -97,6 +113,10 @@ export default function AdminChamados() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {rows && rows.length > 0 && (
+        <Pager offset={offset} limit={LIMIT} count={rows.length} total={total} onChange={setOffset} />
       )}
 
       {sel !== null && <AdminDrawer id={sel} onClose={() => setSel(null)} onChange={carregar} />}

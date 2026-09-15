@@ -1182,14 +1182,29 @@ def admin_overview() -> dict:
     )[0]
 
 
-def admin_list_tenants() -> list[dict]:
+def admin_list_tenants(q: str | None = None, limit: int = 25, offset: int = 0) -> list[dict]:
+    where, params = "", []
+    if q:
+        where = "WHERE (t.nome ILIKE %s OR t.slug ILIKE %s)"
+        params += [f"%{q}%", f"%{q}%"]
     return query(
-        """SELECT t.id, t.nome, t.slug, t.status AS tenant_status, t.created_at,
+        f"""SELECT t.id, t.nome, t.slug, t.status AS tenant_status, t.created_at,
                   s.plan, s.status AS sub_status, s.cancel_at_period_end, s.current_period_end,
                   (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS usuarios
              FROM tenants t LEFT JOIN subscriptions s ON s.tenant_id = t.id
-            ORDER BY t.created_at"""
+            {where}
+            ORDER BY t.created_at
+            LIMIT %s OFFSET %s""",
+        (*params, limit, offset),
     )
+
+
+def admin_count_tenants(q: str | None = None) -> int:
+    where, params = "", []
+    if q:
+        where = "WHERE (nome ILIKE %s OR slug ILIKE %s)"
+        params += [f"%{q}%", f"%{q}%"]
+    return int(query(f"SELECT count(*) AS n FROM tenants {where}", tuple(params))[0]["n"])
 
 
 def admin_set_subscription(tenant_id: int, status: str, plan: str | None = None) -> dict:
@@ -1197,13 +1212,22 @@ def admin_set_subscription(tenant_id: int, status: str, plan: str | None = None)
     return upsert_subscription(tenant_id, status=status, plan=plan)
 
 
-def admin_list_tickets(status: str | None = None, prioridade: str | None = None) -> list[dict]:
+def _ticket_filtros(status, prioridade, q) -> tuple[str, list]:
     conds, params = [], []
     if status:
         conds.append("tk.status = %s"); params.append(status)
     if prioridade:
         conds.append("tk.prioridade = %s"); params.append(prioridade)
+    if q:
+        conds.append("(tk.assunto ILIKE %s OR t.nome ILIKE %s)")
+        params += [f"%{q}%", f"%{q}%"]
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    return where, params
+
+
+def admin_list_tickets(status: str | None = None, prioridade: str | None = None,
+                       q: str | None = None, limit: int = 25, offset: int = 0) -> list[dict]:
+    where, params = _ticket_filtros(status, prioridade, q)
     return query(
         f"""SELECT tk.id, tk.assunto, tk.categoria, tk.prioridade, tk.status,
                    tk.created_at, tk.updated_at, t.id AS tenant_id, t.nome AS tenant_nome,
@@ -1212,9 +1236,19 @@ def admin_list_tickets(status: str | None = None, prioridade: str | None = None)
               {where}
              ORDER BY (tk.status IN ('resolvido','fechado')),
                       CASE tk.prioridade WHEN 'alta' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
-                      tk.updated_at DESC""",
-        tuple(params),
+                      tk.updated_at DESC
+             LIMIT %s OFFSET %s""",
+        (*params, limit, offset),
     )
+
+
+def admin_count_tickets(status: str | None = None, prioridade: str | None = None,
+                        q: str | None = None) -> int:
+    where, params = _ticket_filtros(status, prioridade, q)
+    return int(query(
+        f"SELECT count(*) AS n FROM tickets tk JOIN tenants t ON t.id = tk.tenant_id {where}",
+        tuple(params),
+    )[0]["n"])
 
 
 def admin_get_ticket(ticket_id: int) -> dict | None:
@@ -1266,14 +1300,39 @@ def admin_set_ticket(ticket_id: int, status: str | None = None,
     return admin_get_ticket(ticket_id)
 
 
-def admin_usage_por_tenant() -> list[dict]:
+def admin_usage_por_tenant(q: str | None = None, limit: int = 25, offset: int = 0) -> list[dict]:
+    where, params = "", []
+    if q:
+        where = "WHERE t.nome ILIKE %s"
+        params.append(f"%{q}%")
     return query(
-        """SELECT t.id, t.nome,
+        f"""SELECT t.id, t.nome,
                   COALESCE(SUM(u.tokens),0) AS tokens,
                   COALESCE(SUM(u.custo_estimado),0) AS custo
              FROM tenants t
              LEFT JOIN usage_events u
                ON u.tenant_id = t.id AND u.created_at >= date_trunc('month', now())
+            {where}
             GROUP BY t.id, t.nome
-            ORDER BY custo DESC"""
+            ORDER BY custo DESC
+            LIMIT %s OFFSET %s""",
+        (*params, limit, offset),
     )
+
+
+def admin_usage_totais(q: str | None = None) -> dict:
+    """Totais do mês em TODOS os tenants que casam com a busca (p/ o card)."""
+    where, params = "", []
+    if q:
+        where = "WHERE t.nome ILIKE %s"
+        params.append(f"%{q}%")
+    return query(
+        f"""SELECT count(DISTINCT t.id) AS tenants,
+                  COALESCE(SUM(u.tokens),0) AS tokens,
+                  COALESCE(SUM(u.custo_estimado),0) AS custo
+             FROM tenants t
+             LEFT JOIN usage_events u
+               ON u.tenant_id = t.id AND u.created_at >= date_trunc('month', now())
+            {where}""",
+        tuple(params),
+    )[0]

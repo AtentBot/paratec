@@ -50,6 +50,14 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function _qs(p: Record<string, string | number | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(p)) {
+    if (v !== undefined && v !== "") q.set(k, String(v));
+  }
+  return q.toString();
+}
+
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -140,17 +148,16 @@ export const api = {
 
   // --- Central admin (staff/Dew) ---
   adminOverview: () => get<AdminOverview>("/admin/overview"),
-  adminTenants: () => get<AdminTenant[]>("/admin/tenants"),
+  adminTenants: (p: { q?: string; limit?: number; offset?: number } = {}) =>
+    get<{ items: AdminTenant[]; total: number }>(`/admin/tenants?${_qs(p)}`),
   adminSetAssinatura: (tenantId: number, body: { status: string; plan?: string }) =>
     send<AssinaturaStatus>("PATCH", `/admin/tenants/${tenantId}/assinatura`, body),
-  adminConsumo: () => get<AdminConsumoTenant[]>("/admin/consumo"),
-  adminChamados: (p: { status?: string; prioridade?: string } = {}) => {
-    const qs = new URLSearchParams();
-    if (p.status) qs.set("status", p.status);
-    if (p.prioridade) qs.set("prioridade", p.prioridade);
-    const s = qs.toString();
-    return get<AdminTicketResumo[]>(`/admin/chamados${s ? `?${s}` : ""}`);
-  },
+  adminConsumo: (p: { q?: string; limit?: number; offset?: number } = {}) =>
+    get<{ items: AdminConsumoTenant[]; totais: { tenants: number; tokens: number; custo: number } }>(
+      `/admin/consumo?${_qs(p)}`,
+    ),
+  adminChamados: (p: { status?: string; prioridade?: string; q?: string; limit?: number; offset?: number } = {}) =>
+    get<{ items: AdminTicketResumo[]; total: number }>(`/admin/chamados?${_qs(p)}`),
   adminChamado: (id: number) => get<AdminTicketDetalhe>(`/admin/chamados/${id}`),
   adminResponderChamado: (id: number, corpo: string) =>
     send<AdminTicketDetalhe>("POST", `/admin/chamados/${id}/mensagens`, { corpo }),
