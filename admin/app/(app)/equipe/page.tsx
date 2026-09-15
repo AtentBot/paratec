@@ -184,7 +184,7 @@ export default function EquipePage() {
               <input
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                placeholder="ana@paratec.com.br"
+                placeholder="ana@empresa.com.br"
                 type="email"
                 className={inputCls}
               />

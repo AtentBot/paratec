@@ -2,6 +2,7 @@
 // reais; não há mais fixtures. Falhas de rede são tratadas por `tryApi`.
 import type {
   Agente,
+  AssinaturaStatus,
   Broadcast,
   Capacidade,
   CapacidadeInfo,
@@ -11,7 +12,10 @@ import type {
   ConversaDetalhe,
   ConversaResumo,
   FilaItem,
+  Me,
   Metrics,
+  Plano,
+  Uso,
   Produto,
   RagFonte,
   RagStatus,
@@ -66,17 +70,53 @@ export const api = {
   produto: (idOrSlug: string) =>
     get<Produto>(`/catalog/produtos/${encodeURIComponent(idOrSlug)}`),
 
+  // Importação self-serve do catálogo (CSV).
+  modeloCatalogoUrl: () => `${BASE}/catalog/modelo.csv`,
+  importarCatalogo: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch(`${BASE}/catalog/import`, {
+      method: "POST", body: fd, cache: "no-store", credentials: "include",
+    }).then(async (r) => {
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `erro ${r.status}`);
+      return r.json() as Promise<{ produtos: number; variantes: number; categorias: number }>;
+    });
+  },
+  limparCatalogo: () => send<{ removidos: number }>("DELETE", "/catalog"),
+
   // Clientes
   clientes: (status?: string) =>
     get<Cliente[]>(`/clientes${status ? `?status=${status}` : ""}`),
   cliente: (telefone: string) =>
     get<Cliente>(`/clientes/${encodeURIComponent(telefone)}`),
 
-  // Usuário logado (via Authentik forward-auth headers) — rota Next same-origin
+  // Usuário logado (sessão própria do agent-service). Cai em nulos se deslogado.
   whoami: () =>
-    fetch("/whoami", { cache: "no-store" })
-      .then((r) => r.json() as Promise<{ username: string | null; name: string | null }>)
+    fetch(`${BASE}/auth/me`, { cache: "no-store", credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { username: null, name: null }))
       .catch(() => ({ username: null, name: null })),
+
+  // --- Autenticação (sessão por cookie) ---
+  me: () => get<Me>("/auth/me"),
+  login: (email: string, senha: string) =>
+    send<{ email: string; nome: string | null; role: string; tenant_id: number }>(
+      "POST", "/auth/login", { email, senha },
+    ),
+  signup: (body: { empresa: string; email: string; senha: string; nome?: string }) =>
+    send<{ tenant: { id: number; nome: string; slug: string }; user: { email: string } }>(
+      "POST", "/auth/signup", body,
+    ),
+  logout: () => send<{ ok: boolean }>("POST", "/auth/logout"),
+
+  // --- Billing (Stripe) ---
+  planos: () => get<Plano[]>("/billing/plans"),
+  assinaturaStatus: () => get<AssinaturaStatus>("/billing/status"),
+  uso: () => get<Uso>("/billing/usage"),
+  checkout: (plano: string) =>
+    send<{ url: string }>("POST", "/billing/checkout", { plano }),
+  cancelarAssinatura: (pesquisa?: { respostas?: Record<string, string>; comentario?: string }) =>
+    send<AssinaturaStatus>("POST", "/billing/cancel", pesquisa ?? {}),
+  reativarAssinatura: () => send<AssinaturaStatus>("POST", "/billing/reactivate"),
 
   // Relatórios (por período)
   relatorioResumo: (desde: string, ate: string) =>

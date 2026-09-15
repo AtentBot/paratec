@@ -17,11 +17,14 @@ import {
   Bell,
   BellOff,
   Settings,
+  CreditCard,
+  LogOut,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import type { Me } from "@/lib/types";
 
 type NavItem = {
   href: string;
@@ -31,7 +34,7 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/painel", label: "Dashboard", icon: LayoutDashboard },
   { href: "/conversas", label: "Atendimento", icon: MessagesSquare },
   { href: "/clientes", label: "Clientes", icon: Users },
   { href: "/equipe", label: "Equipe de vendas", icon: UserCog },
@@ -46,6 +49,7 @@ const NAV: NavItem[] = [
 const SISTEMA: NavItem[] = [
   { href: "/agentes", label: "Agentes", icon: Bot },
   { href: "/configuracoes", label: "Configurações", icon: Settings },
+  { href: "/assinatura", label: "Assinatura", icon: CreditCard },
 ];
 
 function NavLink({ item, path }: { item: NavItem; path: string }) {
@@ -99,16 +103,31 @@ function beep() {
 
 export function Sidebar() {
   const path = usePathname();
+  const router = useRouter();
 
   // Indicador global de não-lidas (badge no menu Atendimento) + som opcional.
   const [unread, setUnread] = useState(0);
   const [som, setSom] = useState(false);
+  const [me, setMe] = useState<Me | null>(null);
   const somRef = useRef(false);
   const prevUnread = useRef<number | null>(null);
 
   useEffect(() => {
+    api.me().then(setMe).catch(() => setMe(null));
+  }, []);
+
+  async function logout() {
     try {
-      const on = localStorage.getItem("paratec_som_msg") === "1";
+      await api.logout();
+    } catch {
+      /* ignora */
+    }
+    router.push("/login");
+  }
+
+  useEffect(() => {
+    try {
+      const on = localStorage.getItem("atentbot_som_msg") === "1";
       setSom(on);
       somRef.current = on;
     } catch {
@@ -144,7 +163,7 @@ export function Sidebar() {
     setSom(novo);
     somRef.current = novo;
     try {
-      localStorage.setItem("paratec_som_msg", novo ? "1" : "0");
+      localStorage.setItem("atentbot_som_msg", novo ? "1" : "0");
     } catch {
       /* localStorage indisponível */
     }
@@ -158,8 +177,10 @@ export function Sidebar() {
           <Zap size={18} className="fill-accent" />
         </span>
         <div className="leading-tight">
-          <p className="text-sm font-semibold tracking-tight text-ink">Paratec</p>
-          <p className="text-[11px] text-muted">Central de atendimento</p>
+          <p className="text-sm font-semibold tracking-tight text-ink">AtentBot</p>
+          <p className="text-[11px] text-muted">
+            {me?.tenant?.nome || "Central de atendimento"}
+          </p>
         </div>
       </div>
 
@@ -201,13 +222,24 @@ export function Sidebar() {
           </span>
         </button>
         <div className="flex items-center gap-3 rounded-lg px-2 py-2">
-          <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-xs font-semibold text-accent-ink">
-            DB
+          <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-xs font-semibold uppercase text-accent-ink">
+            {(me?.nome || me?.email || "?").slice(0, 2)}
           </span>
-          <div className="min-w-0 leading-tight">
-            <p className="truncate text-xs font-medium text-ink">Douglas Braga</p>
-            <p className="truncate text-[11px] text-muted">Administrador</p>
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="truncate text-xs font-medium text-ink">
+              {me?.nome || me?.email || "—"}
+            </p>
+            <p className="truncate text-[11px] text-muted">
+              {me?.role === "owner" ? "Responsável" : "Atendente"}
+            </p>
           </div>
+          <button
+            onClick={logout}
+            title="Sair"
+            className="grid h-8 w-8 place-items-center rounded-lg text-faint transition hover:bg-surface-2 hover:text-danger"
+          >
+            <LogOut size={15} />
+          </button>
         </div>
       </div>
     </aside>

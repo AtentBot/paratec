@@ -215,7 +215,7 @@ export default function ConfiguracoesPage() {
                   value={nome}
                   onChange={(e) => setNome(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && podeCriar && !criando && criar()}
-                  placeholder="Ex.: paratec-comercial"
+                  placeholder="Ex.: minha-empresa-vendas"
                   className={inputCls}
                 />
                 <span className="text-[11px] text-faint">

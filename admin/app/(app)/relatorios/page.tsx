@@ -77,7 +77,7 @@ export default function RelatoriosPage() {
       {offline && <OfflineNotice base={api.base} />}
 
       <div className="print-only mb-2 border-b pb-2">
-        <p className="text-xl font-bold text-ink">Relatório · Paratec Atendimentos</p>
+        <p className="text-xl font-bold text-ink">Relatório · Atendimentos AtentBot</p>
         <p className="text-sm text-muted">Período: {desde} até {ate}</p>
       </div>
 

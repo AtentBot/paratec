@@ -2,7 +2,7 @@
   "name": "paratec-admin",
   "version": "0.1.0",
   "private": true,
-  "description": "Tela administrativa da plataforma de atendimento Paratec",
+  "description": "Painel do AtentBot — atendimento com IA no WhatsApp",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

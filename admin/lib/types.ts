@@ -217,3 +217,50 @@ export interface Metrics {
     campanhas: number;
   };
 }
+
+// --- Autenticação & assinatura (SaaS multi-tenant) ---
+export interface AssinaturaStatus {
+  tem_assinatura: boolean;
+  ativa: boolean;
+  status: string;
+  plan: string | null;
+  cancel_at_period_end: boolean;
+  current_period_end: string | null;
+}
+
+export interface Me {
+  email: string;
+  nome: string | null;
+  name: string | null;
+  username: string | null;
+  role: string;
+  tenant: { id: number; nome: string | null; slug: string | null };
+  assinatura: AssinaturaStatus;
+}
+
+export interface Plano {
+  id: string;
+  nome: string;
+  preco: number;
+  descricao: string;
+  disponivel: boolean;
+}
+
+// --- Consumo pay-per-use (medição de tokens) ---
+export interface UsoTipo {
+  tipo: string;
+  label: string;
+  tokens: number;
+  custo: number;
+  eventos: number;
+}
+
+export interface Uso {
+  mes: string;
+  tokens: number;
+  custo: number;
+  eventos: number;
+  por_tipo: UsoTipo[];
+  cobranca_automatica: boolean;
+  precos: { embedding_por_1k: number; chat_por_1k: number };
+}

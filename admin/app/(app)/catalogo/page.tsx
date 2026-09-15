@@ -7,13 +7,17 @@ import type { Categoria, Produto } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import {
   Boxes,
+  Download,
   ExternalLink,
   Layers,
+  Loader2,
   Package,
   Search,
+  Trash2,
+  Upload,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function CatalogoPage() {
   const [produtos, setProdutos] = useState<Produto[]>([]);
@@ -23,11 +27,13 @@ export default function CatalogoPage() {
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
   const [sel, setSel] = useState<Produto | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [reload, setReload] = useState(0);
 
-  // Categorias uma vez.
+  // Categorias (recarrega após importar/limpar).
   useEffect(() => {
     api.categorias().then(setCategorias).catch(() => setCategorias([]));
-  }, []);
+  }, [reload]);
 
   // Produtos reagem a busca/categoria (com debounce simples).
   useEffect(() => {
@@ -46,7 +52,7 @@ export default function CatalogoPage() {
         .finally(() => setLoading(false));
     }, 250);
     return () => clearTimeout(t);
-  }, [q, cat]);
+  }, [q, cat, reload]);
 
   return (
     <div className="flex flex-col gap-4 animate-fade-in">
@@ -54,17 +60,25 @@ export default function CatalogoPage() {
 
       {/* Busca + categorias */}
       <div className="flex flex-col gap-3">
-        <div className="relative max-w-md">
-          <Search
-            size={16}
-            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
-          />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por nome, SKU ou material…"
-            className="w-full rounded-lg border bg-surface py-2.5 pl-9 pr-3 text-sm text-ink outline-none placeholder:text-faint focus:ring-2 focus:ring-accent/40"
-          />
+        <div className="flex items-center gap-3">
+          <div className="relative max-w-md flex-1">
+            <Search
+              size={16}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
+            />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Buscar por nome, SKU ou material…"
+              className="w-full rounded-lg border bg-surface py-2.5 pl-9 pr-3 text-sm text-ink outline-none placeholder:text-faint focus:ring-2 focus:ring-accent/40"
+            />
+          </div>
+          <button
+            onClick={() => setImportOpen(true)}
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-feature px-3.5 py-2.5 text-sm font-semibold text-feature-fg transition hover:opacity-90"
+          >
+            <Upload size={15} /> Importar catálogo
+          </button>
         </div>
         <div className="flex flex-wrap gap-1.5">
           <button
@@ -151,6 +165,126 @@ export default function CatalogoPage() {
       )}
 
       {sel && <ProdutoDrawer slug={sel.slug} base={sel} onClose={() => setSel(null)} />}
+      {importOpen && (
+        <ImportarModal
+          onClose={() => setImportOpen(false)}
+          onDone={() => setReload((r) => r + 1)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ImportarModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [res, setRes] = useState<{ produtos: number; variantes: number; categorias: number } | null>(null);
+
+  async function importar() {
+    if (!file) return;
+    setBusy(true);
+    setErro(null);
+    setRes(null);
+    try {
+      const r = await api.importarCatalogo(file);
+      setRes(r);
+      onDone();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "falha ao importar");
+    }
+    setBusy(false);
+  }
+
+  async function limpar() {
+    if (!confirm("Apagar TODO o catálogo desta conta? Esta ação não pode ser desfeita.")) return;
+    setBusy(true);
+    setErro(null);
+    try {
+      await api.limparCatalogo();
+      setRes(null);
+      onDone();
+      onClose();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "falha ao limpar");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-lg rounded-2xl border bg-surface p-6 shadow-lift animate-fade-in">
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Importar catálogo</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Envie um CSV com seus produtos. Reimportar atualiza pelos nomes já existentes.
+            </p>
+          </div>
+          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-ink">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="mt-5 flex flex-col gap-4">
+          <a
+            href={api.modeloCatalogoUrl()}
+            className="inline-flex w-fit items-center gap-2 text-sm font-medium text-accent-ink hover:underline"
+          >
+            <Download size={14} /> Baixar modelo (CSV)
+          </a>
+
+          <div
+            onClick={() => inputRef.current?.click()}
+            className="cursor-pointer rounded-xl border border-dashed bg-surface-2 px-4 py-8 text-center transition hover:border-accent"
+          >
+            <Upload size={22} className="mx-auto text-faint" />
+            <p className="mt-2 text-sm text-ink">
+              {file ? file.name : "Clique para escolher o arquivo CSV"}
+            </p>
+            <p className="text-[11px] text-muted">Colunas: produto, categoria, sku, material, dimensoes, atributos, descricao</p>
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+          </div>
+
+          {res && (
+            <div className="rounded-lg bg-success/10 px-3 py-2 text-sm text-success">
+              Importado: {res.produtos} produtos, {res.variantes} variantes, {res.categorias} categorias.
+            </div>
+          )}
+          {erro && <p className="text-sm text-danger">{erro}</p>}
+
+          <div className="flex items-center justify-between gap-2">
+            <button
+              onClick={limpar}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-danger transition hover:bg-danger/10 disabled:opacity-50"
+            >
+              <Trash2 size={14} /> Limpar catálogo
+            </button>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="rounded-lg border px-4 py-2 text-sm font-medium text-muted transition hover:text-ink">
+                Fechar
+              </button>
+              <button
+                onClick={importar}
+                disabled={!file || busy}
+                className="inline-flex items-center gap-2 rounded-lg bg-feature px-4 py-2 text-sm font-semibold text-feature-fg transition hover:opacity-90 disabled:opacity-50"
+              >
+                {busy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                Importar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
