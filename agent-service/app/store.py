@@ -115,6 +115,26 @@ def set_opt_out(tenant_id: int, telefone: str, value: bool = True) -> None:
     )
 
 
+def customer_contexto(tenant_id: int, telefone: str, limite: int = 5) -> dict:
+    """Contexto COMPACTO do cliente p/ hiperpersonalização (dado estruturado, sem
+    LLM): perfil + últimos orçamentos/solicitações + estatísticas. Token-leve."""
+    cliente = get_customer(tenant_id, telefone)
+    pedidos = query(
+        """SELECT tipo, resumo, status, created_at FROM queue_items
+            WHERE tenant_id = %s AND (telefone = %s OR thread_id = %s)
+            ORDER BY created_at DESC LIMIT %s""",
+        (tenant_id, telefone, telefone, limite),
+    )
+    stats = query(
+        """SELECT count(*) FILTER (WHERE tipo = 'pedido') AS orcamentos,
+                  count(*) AS solicitacoes
+             FROM queue_items
+            WHERE tenant_id = %s AND (telefone = %s OR thread_id = %s)""",
+        (tenant_id, telefone, telefone),
+    )[0]
+    return {"cliente": cliente, "pedidos": pedidos, "stats": stats}
+
+
 # --- Broadcast (envio em massa) ------------------------------------------
 
 # Segmentos: os subselects também filtram pelo tenant do cliente (c.tenant_id).
@@ -591,7 +611,7 @@ def delete_seller(tenant_id: int, seller_id: int) -> bool:
 
 _AGENT_COLS = (
     "id, tenant_id, nome, descricao, instancia, persona, capacidades, ativo, is_default, "
-    "created_at, updated_at"
+    "hiperpersonalizacao, created_at, updated_at"
 )
 
 
@@ -657,11 +677,14 @@ def create_agent(
     persona: str | None,
     capacidades: list[str],
     ativo: bool = True,
+    hiperpersonalizacao: bool = False,
 ) -> dict:
     rows = execute(
-        f"""INSERT INTO agents (tenant_id, nome, descricao, instancia, persona, capacidades, ativo)
-             VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_AGENT_COLS}""",
-        (tenant_id, nome, descricao, instancia or None, persona, capacidades, ativo),
+        f"""INSERT INTO agents (tenant_id, nome, descricao, instancia, persona,
+                                capacidades, ativo, hiperpersonalizacao)
+             VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_AGENT_COLS}""",
+        (tenant_id, nome, descricao, instancia or None, persona, capacidades, ativo,
+         hiperpersonalizacao),
         returning=True,
     )
     return rows[0]
@@ -676,6 +699,7 @@ def update_agent(
     persona: str | None = None,
     capacidades: list[str] | None = None,
     ativo: bool | None = None,
+    hiperpersonalizacao: bool | None = None,
     *,
     limpar_instancia: bool = False,
 ) -> dict | None:
@@ -685,7 +709,7 @@ def update_agent(
     params: list = [nome, descricao]
     if not limpar_instancia:
         params.append(instancia or None)
-    params += [persona, capacidades, ativo, tenant_id, agent_id]
+    params += [persona, capacidades, ativo, hiperpersonalizacao, tenant_id, agent_id]
     rows = execute(
         f"""
         UPDATE agents SET
@@ -695,6 +719,7 @@ def update_agent(
             persona     = COALESCE(%s, persona),
             capacidades = COALESCE(%s, capacidades),
             ativo       = COALESCE(%s, ativo),
+            hiperpersonalizacao = COALESCE(%s, hiperpersonalizacao),
             updated_at  = now()
          WHERE tenant_id = %s AND id = %s
         RETURNING {_AGENT_COLS}

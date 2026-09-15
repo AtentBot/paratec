@@ -214,11 +214,9 @@ def _build_agent(persona: str | None, capacidades: tuple[str, ...]):
     )
 
 
-def _agent_para(tenant_id: int, instancia: str | None):
-    """Escolhe o app do agente que atende a instância (número), dentro do tenant.
-
-    Ordem: agente amarrado ao número → agente PADRÃO do tenant (editável na tela
-    de Agentes) → agente hardcoded (get_app), só se não houver padrão no banco."""
+def _cfg_para(tenant_id: int, instancia: str | None) -> dict | None:
+    """Resolve o AGENTE (config) que atende a instância, dentro do tenant.
+    Ordem: agente amarrado ao número → agente PADRÃO do tenant."""
     cfg = None
     try:
         if instancia:
@@ -228,11 +226,58 @@ def _agent_para(tenant_id: int, instancia: str | None):
     except Exception as e:  # pragma: no cover
         log.warning("falha ao resolver agente da instância %s: %s", instancia, e)
         cfg = None
+    return cfg
+
+
+def _app_do_cfg(cfg: dict | None):
+    """App compilado a partir da config do agente (ou o padrão hardcoded)."""
     if not cfg or not cfg.get("ativo"):
         return get_app()
     caps = tuple(c for c in CAPACIDADES_ORDEM if c in set(cfg.get("capacidades") or []))
     persona = (cfg.get("persona") or "").strip() or None
     return _build_agent(persona, caps)
+
+
+def _agent_para(tenant_id: int, instancia: str | None):
+    return _app_do_cfg(_cfg_para(tenant_id, instancia))
+
+
+def _montar_contexto(tenant_id: int, telefone: str) -> str:
+    """Bloco COMPACTO de contexto do cliente p/ hiperpersonalização. Só dado
+    estruturado (perfil + últimos orçamentos/solicitações) — token-leve e capado.
+    Retorna '' se não há nada útil (ex.: número novo sem histórico)."""
+    try:
+        ctx = store.customer_contexto(tenant_id, telefone)
+    except Exception as e:  # pragma: no cover
+        log.warning("contexto do cliente falhou: %s", e)
+        return ""
+    c = ctx.get("cliente")
+    pedidos = ctx.get("pedidos") or []
+    st = ctx.get("stats") or {}
+    if not c and not pedidos:
+        return ""
+    linhas = ["CONTEXTO DO CLIENTE (use para personalizar; não repita literalmente "
+              "nem invente dados):"]
+    if c:
+        nome = c.get("razao_social") or c.get("nome_contato")
+        if nome:
+            extra = (f" (contato: {c['nome_contato']})"
+                     if c.get("nome_contato") and c.get("razao_social") else "")
+            linhas.append(f"- Cliente: {nome}{extra}.")
+    orc, sol = st.get("orcamentos") or 0, st.get("solicitacoes") or 0
+    if sol:
+        linhas.append(f"- Histórico: {orc} orçamento(s), {sol} solicitação(ões).")
+    if pedidos:
+        linhas.append("- Registros recentes:")
+        for p in pedidos:
+            try:
+                data = p["created_at"].strftime("%d/%m")
+            except Exception:
+                data = ""
+            resumo = (p.get("resumo") or "").strip().replace("\n", " ")[:120]
+            linhas.append(f"  • [{p.get('tipo')}/{p.get('status')}] {resumo}"
+                          + (f" ({data})" if data else ""))
+    return "\n".join(linhas)
 
 
 def _extrair_texto(content) -> str:
@@ -430,8 +475,20 @@ def responder(
             pass
         return ""
 
-    result = _agent_para(tenant_id, instancia).invoke(
-        {"messages": [{"role": "user", "content": mensagem}]},
+    cfg = _cfg_para(tenant_id, instancia)
+    app = _app_do_cfg(cfg)
+
+    # Hiperpersonalização (opt-in por agente): injeta um bloco de contexto do
+    # cliente (perfil + histórico de orçamentos/solicitações). Só quando ligado.
+    mensagens: list[dict] = []
+    if cfg and cfg.get("hiperpersonalizacao"):
+        contexto = _montar_contexto(tenant_id, thread_id)
+        if contexto:
+            mensagens.append({"role": "system", "content": contexto})
+    mensagens.append({"role": "user", "content": mensagem})
+
+    result = app.invoke(
+        {"messages": mensagens},
         config={"configurable": {
             "thread_id": graph_thread,
             "telefone": thread_id,

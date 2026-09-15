@@ -187,6 +187,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_instancia
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_default ON agents(is_default) WHERE is_default;
 
+-- Hiperpersonalização (opt-in por agente): quando ligada, o agente recebe um
+-- bloco de CONTEXTO do cliente (perfil + últimos orçamentos/solicitações) para
+-- personalizar. Ideal p/ agentes de vendas/orçamento; dispensável p/ FAQ.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS hiperpersonalizacao BOOLEAN NOT NULL DEFAULT false;
+
 -- Semeia o agente padrão (idempotente): persona vazia + todas as capacidades =
 -- reproduz o prompt base histórico (ATENDENTE_PROMPT). Só insere se ainda não há.
 INSERT INTO agents (nome, descricao, persona, capacidades, ativo, is_default)

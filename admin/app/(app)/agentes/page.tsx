@@ -14,6 +14,7 @@ import {
   Pencil,
   Plus,
   Smartphone,
+  Sparkles,
   Trash2,
   WifiOff,
   X,
@@ -27,8 +28,12 @@ type Form = {
   instancia: string;
   persona: string;
   capacidades: Capacidade[];
+  hiperpersonalizacao: boolean;
 };
-const VAZIO: Form = { nome: "", descricao: "", instancia: "", persona: "", capacidades: [] };
+const VAZIO: Form = {
+  nome: "", descricao: "", instancia: "", persona: "", capacidades: [],
+  hiperpersonalizacao: false,
+};
 
 export default function AgentesPage() {
   const [lista, setLista] = useState<Agente[]>([]);
@@ -87,6 +92,7 @@ export default function AgentesPage() {
       instancia: a.instancia ?? "",
       persona: a.persona ?? "",
       capacidades: a.capacidades ?? [],
+      hiperpersonalizacao: a.hiperpersonalizacao ?? false,
     });
     setErro(null);
     setAberto(true);
@@ -118,6 +124,7 @@ export default function AgentesPage() {
         instancia: form.instancia || "", // "" desamarra no PATCH
         persona: form.persona.trim() || null,
         capacidades: form.capacidades,
+        hiperpersonalizacao: form.hiperpersonalizacao,
       };
       if (editId === null) await api.criarAgente(body);
       else await api.atualizarAgente(editId, body);
@@ -325,6 +332,25 @@ export default function AgentesPage() {
             )}
           </div>
 
+          <div className="mt-3 rounded-xl border bg-surface-2 p-3">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={form.hiperpersonalizacao}
+                onChange={(e) => setForm({ ...form, hiperpersonalizacao: e.target.checked })}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-[color:var(--accent)]"
+              />
+              <span className="text-sm">
+                <span className="font-medium text-ink">Hiperpersonalização</span>
+                <span className="block text-[11px] text-muted">
+                  O agente usa o histórico do cliente (perfil + últimos orçamentos/solicitações)
+                  como contexto. Recomendado para vendas/orçamentos; dispensável para FAQ.
+                  Consumo de tokens é otimizado (contexto compacto e limitado).
+                </span>
+              </span>
+            </label>
+          </div>
+
           {erro && <p className="mt-3 text-xs text-danger">{erro}</p>}
           <div className="mt-4 flex items-center gap-2">
             <button
@@ -386,6 +412,11 @@ export default function AgentesPage() {
                   </div>
                   {a.descricao && (
                     <p className="mt-0.5 truncate text-[11px] text-muted">{a.descricao}</p>
+                  )}
+                  {a.hiperpersonalizacao && (
+                    <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent-ink">
+                      <Sparkles size={10} /> Hiperpersonalizado
+                    </span>
                   )}
                 </div>
               </div>

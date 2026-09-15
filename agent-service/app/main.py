@@ -147,6 +147,7 @@ class AgenteCreate(BaseModel):
     persona: str | None = None
     capacidades: list[str] = []
     ativo: bool = True
+    hiperpersonalizacao: bool = False
 
 
 class AgenteUpdate(BaseModel):
@@ -156,6 +157,7 @@ class AgenteUpdate(BaseModel):
     persona: str | None = None
     capacidades: list[str] | None = None
     ativo: bool | None = None
+    hiperpersonalizacao: bool | None = None
 
 
 class SignupRequest(BaseModel):
@@ -721,7 +723,8 @@ def agente_criar(req: AgenteCreate,
         if store.get_agent_by_instancia(inst):
             raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
     try:
-        agente = store.create_agent(tenant.tenant_id, nome, req.descricao, inst, req.persona, caps, req.ativo)
+        agente = store.create_agent(tenant.tenant_id, nome, req.descricao, inst,
+                                    req.persona, caps, req.ativo, req.hiperpersonalizacao)
     except Exception as e:
         if "idx_agents_instancia" in str(e):
             raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
@@ -759,6 +762,7 @@ def agente_atualizar(agent_id: int, req: AgenteUpdate,
             persona=req.persona,
             capacidades=caps,
             ativo=req.ativo,
+            hiperpersonalizacao=req.hiperpersonalizacao,
             limpar_instancia=limpar,
         )
     except Exception as e:

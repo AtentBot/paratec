@@ -289,6 +289,7 @@ export const api = {
     persona?: string | null;
     capacidades?: Capacidade[];
     ativo?: boolean;
+    hiperpersonalizacao?: boolean;
   }) => send<Agente>("POST", "/agentes", body),
   atualizarAgente: (
     id: number,
@@ -299,6 +300,7 @@ export const api = {
       persona?: string | null;
       capacidades?: Capacidade[];
       ativo?: boolean;
+      hiperpersonalizacao?: boolean;
     },
   ) => send<Agente>("PATCH", `/agentes/${id}`, body),
   removerAgente: (id: number) => send<{ removido: number }>("DELETE", `/agentes/${id}`),

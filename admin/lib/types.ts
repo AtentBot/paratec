@@ -103,6 +103,7 @@ export interface Agente {
   capacidades: Capacidade[];
   ativo: boolean;
   is_default: boolean; // agente catch-all (atende números sem agente próprio)
+  hiperpersonalizacao: boolean; // usa histórico do cliente como contexto
   created_at: string;
   updated_at: string;
 }
