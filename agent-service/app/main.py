@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, billing, catalog, evolution, ingest, realtime, store
+from . import auth, billing, catalog, evolution, ingest, mailer, realtime, store
 from .agents import CAPACIDADES, CAPACIDADES_ORDEM, responder
 from .auth import TenantCtx, current_tenant
 from .billing import require_active_subscription
@@ -347,9 +347,15 @@ def suporte_criar(req: TicketCreate, tenant: TenantCtx = Depends(current_tenant)
         raise HTTPException(status_code=422, detail="categoria inválida")
     if req.prioridade not in _TICKET_PRIORIDADES:
         raise HTTPException(status_code=422, detail="prioridade inválida")
-    return store.create_ticket(
+    t = store.create_ticket(
         tenant.tenant_id, tenant.user_id, assunto, req.categoria, req.prioridade, descricao
     )
+    try:
+        tn = (store.get_tenant(tenant.tenant_id) or {}).get("nome")
+        mailer.notificar_novo_chamado(t, tn, tenant.email, descricao)
+    except Exception:  # pragma: no cover
+        pass
+    return t
 
 
 @app.get("/suporte/chamados/{ticket_id}")
@@ -369,6 +375,11 @@ def suporte_responder(ticket_id: int, req: TicketMensagem,
     t = store.add_ticket_message(tenant.tenant_id, ticket_id, "cliente", corpo)
     if t is None:
         raise HTTPException(status_code=404, detail="chamado não encontrado")
+    try:
+        tn = (store.get_tenant(tenant.tenant_id) or {}).get("nome")
+        mailer.notificar_nova_mensagem(ticket_id, t["assunto"], tn, tenant.email, corpo)
+    except Exception:  # pragma: no cover
+        pass
     return t
 
 

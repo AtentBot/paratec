@@ -49,6 +49,26 @@ class Settings(BaseSettings):
     # E-mail de suporte/contato exibido ao cliente (páginas legais, tela de suporte).
     support_email: str = "contato@dewconsultoria.com.br"
 
+    # SMTP p/ notificações por e-mail (abertura/atualização de chamados). Vazio =
+    # desabilitado (chamados ficam só no painel). NÃO commitar SMTP_PASS — use
+    # .env.docker (gitignored). smtp_ssl=true usa STARTTLS na 587 / SSL na 465.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    smtp_ssl: bool = True
+    smtp_from_name: str = "AtentBot"
+    smtp_from_email: str = ""
+    smtp_reply_to: str = ""   # vazio = usa support_email
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from_email)
+
+    @property
+    def reply_to(self) -> str:
+        return self.smtp_reply_to or self.support_email
+
     # -----------------------------------------------------------------------
     # Multi-tenant / autenticação de aplicação
     # -----------------------------------------------------------------------
