@@ -56,8 +56,8 @@ O consumo (indexação + conversas) é sempre **medido e mostrado** no painel. P
    consumo é reportado ao Stripe em tempo real.
 4. **Checkout:** novas assinaturas já entram com os itens metered (plano base +
    2 itens de consumo). **Assinaturas já existentes** NÃO ganham os itens
-   retroativamente — adicione os dois preços metered como itens da subscription
-   (Dashboard → a subscription → Add product, ou API `SubscriptionItem.create`).
+   retroativamente — rode o utilitário (idempotente, dry-run por padrão):
+   `cd agent-service && .venv/bin/python backfill_metered.py` (depois `--apply`).
 5. Redeploy o agent-service com as envs. O reporte é best-effort: se o Stripe
    falhar, o consumo continua medido no banco (nada trava o atendimento).
 
@@ -99,7 +99,7 @@ Faça **backup** e rode o runner (aplica `db/schema_ops.sql`: novas tabelas,
 `tenant_id` + backfill, PKs compostas, seeds da Paratec):
 
 ```
-pg_dump ... > backup_pre_saas.sql
+PGHOST=... PGUSER=... PGPASSWORD=... PGDATABASE=paratec bash scripts/backup_db.sh
 PGHOST=... PGUSER=... PGPASSWORD=... PGDATABASE=paratec bash scripts/migrate_saas.sh
 ```
 
