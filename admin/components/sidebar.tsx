@@ -19,6 +19,8 @@ import {
   Settings,
   CreditCard,
   LifeBuoy,
+  ShieldCheck,
+  Gauge,
   LogOut,
   Zap,
 } from "lucide-react";
@@ -52,6 +54,14 @@ const SISTEMA: NavItem[] = [
   { href: "/configuracoes", label: "Configurações", icon: Settings },
   { href: "/assinatura", label: "Assinatura", icon: CreditCard },
   { href: "/suporte", label: "Suporte", icon: LifeBuoy },
+];
+
+// Central da equipe Dew (cross-tenant) — só aparece para usuários staff.
+const ADMIN: NavItem[] = [
+  { href: "/admin", label: "Visão geral", icon: ShieldCheck },
+  { href: "/admin/chamados", label: "Chamados", icon: LifeBuoy },
+  { href: "/admin/assinaturas", label: "Assinaturas", icon: CreditCard },
+  { href: "/admin/consumo", label: "Consumo", icon: Gauge },
 ];
 
 function NavLink({ item, path }: { item: NavItem; path: string }) {
@@ -204,6 +214,17 @@ export function Sidebar() {
         {SISTEMA.map((item) => (
           <NavLink key={item.href} item={item} path={path} />
         ))}
+
+        {me?.is_staff && (
+          <>
+            <p className="px-3 pb-1 pt-5 text-[10px] font-semibold uppercase tracking-wider text-faint">
+              Administração
+            </p>
+            {ADMIN.map((item) => (
+              <NavLink key={item.href} item={item} path={path} />
+            ))}
+          </>
+        )}
       </nav>
 
       <div className="border-t px-4 py-3">

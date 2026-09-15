@@ -243,6 +243,9 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(lower(email));
 CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
 
+-- Staff da plataforma (equipe Dew): acesso cross-tenant à central admin.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_staff BOOLEAN NOT NULL DEFAULT false;
+
 -- 3) Sessões (cookie opaco; guardamos só o SHA-256 do token) ------------------
 CREATE TABLE IF NOT EXISTS sessions (
     id           BIGSERIAL PRIMARY KEY,

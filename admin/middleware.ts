@@ -8,7 +8,7 @@ import type { NextRequest } from "next/server";
 const PROTEGIDAS = [
   "/painel", "/conversas", "/clientes", "/equipe", "/orcamentos", "/catalogo",
   "/fila", "/promocoes", "/conhecimento", "/relatorios", "/agentes",
-  "/configuracoes", "/assinatura", "/suporte",
+  "/configuracoes", "/assinatura", "/suporte", "/admin",
 ];
 
 export function middleware(req: NextRequest) {

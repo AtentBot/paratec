@@ -125,6 +125,14 @@ cd agent-service
 
 (No container: `docker exec <container> python seed_owner.py --slug paratec ...`.)
 
+**Equipe Dew (central admin):** promova os usuários da equipe a staff (acesso
+cross-tenant à central `/admin`):
+
+```
+cd agent-service
+.venv/bin/python make_staff.py --email suporte@dewconsultoria.com.br
+```
+
 ---
 
 ## 5. Deploy dos serviços

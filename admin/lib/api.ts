@@ -1,6 +1,11 @@
 // Cliente do agent-service (FastAPI). Todas as seções agora consomem dados
 // reais; não há mais fixtures. Falhas de rede são tratadas por `tryApi`.
 import type {
+  AdminConsumoTenant,
+  AdminOverview,
+  AdminTenant,
+  AdminTicketDetalhe,
+  AdminTicketResumo,
   Agente,
   AssinaturaStatus,
   Broadcast,
@@ -132,6 +137,25 @@ export const api = {
     send<TicketDetalhe>("POST", `/suporte/chamados/${id}/mensagens`, { corpo }),
   statusChamado: (id: number, status: string) =>
     send<TicketDetalhe>("PATCH", `/suporte/chamados/${id}`, { status }),
+
+  // --- Central admin (staff/Dew) ---
+  adminOverview: () => get<AdminOverview>("/admin/overview"),
+  adminTenants: () => get<AdminTenant[]>("/admin/tenants"),
+  adminSetAssinatura: (tenantId: number, body: { status: string; plan?: string }) =>
+    send<AssinaturaStatus>("PATCH", `/admin/tenants/${tenantId}/assinatura`, body),
+  adminConsumo: () => get<AdminConsumoTenant[]>("/admin/consumo"),
+  adminChamados: (p: { status?: string; prioridade?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (p.status) qs.set("status", p.status);
+    if (p.prioridade) qs.set("prioridade", p.prioridade);
+    const s = qs.toString();
+    return get<AdminTicketResumo[]>(`/admin/chamados${s ? `?${s}` : ""}`);
+  },
+  adminChamado: (id: number) => get<AdminTicketDetalhe>(`/admin/chamados/${id}`),
+  adminResponderChamado: (id: number, corpo: string) =>
+    send<AdminTicketDetalhe>("POST", `/admin/chamados/${id}/mensagens`, { corpo }),
+  adminAtualizarChamado: (id: number, body: { status?: string; prioridade?: string }) =>
+    send<AdminTicketDetalhe>("PATCH", `/admin/chamados/${id}`, body),
 
   // Relatórios (por período)
   relatorioResumo: (desde: string, ate: string) =>

@@ -235,6 +235,7 @@ export interface Me {
   name: string | null;
   username: string | null;
   role: string;
+  is_staff: boolean;
   tenant: { id: number; nome: string | null; slug: string | null };
   assinatura: AssinaturaStatus;
 }
@@ -293,4 +294,59 @@ export interface TicketDetalhe {
   created_at: string;
   updated_at: string;
   mensagens: TicketMsg[];
+}
+
+// --- Central admin (staff/Dew) — cross-tenant ---
+export interface AdminOverview {
+  tenants: number;
+  ativos: number;
+  chamados_abertos: number;
+  consumo_mes: number;
+}
+
+export interface AdminTenant {
+  id: number;
+  nome: string;
+  slug: string;
+  tenant_status: string;
+  created_at: string;
+  plan: string | null;
+  sub_status: string | null;
+  cancel_at_period_end: boolean | null;
+  current_period_end: string | null;
+  usuarios: number;
+}
+
+export interface AdminTicketResumo {
+  id: number;
+  assunto: string;
+  categoria: string;
+  prioridade: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  tenant_id: number;
+  tenant_nome: string;
+  mensagens: number;
+}
+
+export interface AdminTicketDetalhe {
+  id: number;
+  tenant_id: number;
+  assunto: string;
+  categoria: string;
+  prioridade: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  tenant_nome: string;
+  cliente_email: string | null;
+  mensagens: TicketMsg[];
+}
+
+export interface AdminConsumoTenant {
+  id: number;
+  nome: string;
+  tokens: number;
+  custo: number;
 }

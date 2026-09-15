@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from . import auth, billing, catalog, evolution, ingest, mailer, realtime, store
 from .agents import CAPACIDADES, CAPACIDADES_ORDEM, responder
-from .auth import TenantCtx, current_tenant
+from .auth import TenantCtx, current_admin, current_tenant
 from .billing import require_active_subscription
 from .db import get_pool
 from .settings import settings
@@ -196,6 +196,16 @@ class TicketStatus(BaseModel):
     status: str
 
 
+class AdminSubReq(BaseModel):
+    status: str
+    plan: str | None = None
+
+
+class AdminTicketReq(BaseModel):
+    status: str | None = None
+    prioridade: str | None = None
+
+
 class InstanciaCreate(BaseModel):
     nome: str
 
@@ -261,6 +271,7 @@ def auth_me(tenant: TenantCtx = Depends(current_tenant)):
         "name": tenant.nome or tenant.email,   # compat com o whoami antigo
         "username": tenant.email,
         "role": tenant.role,
+        "is_staff": tenant.is_staff,
         "tenant": {"id": tenant.tenant_id, "nome": (t or {}).get("nome"), "slug": (t or {}).get("slug")},
         "assinatura": billing.status(tenant.tenant_id),
     }
@@ -392,6 +403,91 @@ def suporte_status(ticket_id: int, req: TicketStatus,
     if req.status not in {"aberto", "fechado"}:
         raise HTTPException(status_code=422, detail="status inválido")
     t = store.set_ticket_status(tenant.tenant_id, ticket_id, req.status)
+    if t is None:
+        raise HTTPException(status_code=404, detail="chamado não encontrado")
+    return t
+
+
+# =========================================================================
+# ADMIN (central da equipe Dew) — cross-tenant, protegido por current_admin.
+# =========================================================================
+
+_TICKET_STATUS = {"aberto", "em_andamento", "resolvido", "fechado"}
+_SUB_STATUS = {"active", "trialing", "past_due", "unpaid", "canceled", "incomplete"}
+
+
+@app.get("/admin/overview")
+def admin_overview(admin: TenantCtx = Depends(current_admin)):
+    return store.admin_overview()
+
+
+@app.get("/admin/tenants")
+def admin_tenants(admin: TenantCtx = Depends(current_admin)):
+    return store.admin_list_tenants()
+
+
+@app.patch("/admin/tenants/{tenant_id}/assinatura")
+def admin_set_sub(tenant_id: int, req: AdminSubReq,
+                  admin: TenantCtx = Depends(current_admin)):
+    if req.status not in _SUB_STATUS:
+        raise HTTPException(status_code=422, detail="status inválido")
+    if req.plan is not None and req.plan not in {"essencial", "profissional", "escala"}:
+        raise HTTPException(status_code=422, detail="plano inválido")
+    if not store.get_tenant(tenant_id):
+        raise HTTPException(status_code=404, detail="tenant não encontrado")
+    return store.admin_set_subscription(tenant_id, req.status, req.plan)
+
+
+@app.get("/admin/consumo")
+def admin_consumo(admin: TenantCtx = Depends(current_admin)):
+    return store.admin_usage_por_tenant()
+
+
+@app.get("/admin/chamados")
+def admin_chamados(status: str | None = None, prioridade: str | None = None,
+                   admin: TenantCtx = Depends(current_admin)):
+    return store.admin_list_tickets(status, prioridade)
+
+
+@app.get("/admin/chamados/{ticket_id}")
+def admin_chamado(ticket_id: int, admin: TenantCtx = Depends(current_admin)):
+    t = store.admin_get_ticket(ticket_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="chamado não encontrado")
+    return t
+
+
+@app.post("/admin/chamados/{ticket_id}/mensagens")
+def admin_responder(ticket_id: int, req: TicketMensagem,
+                    admin: TenantCtx = Depends(current_admin)):
+    corpo = req.corpo.strip()
+    if not corpo:
+        raise HTTPException(status_code=422, detail="mensagem vazia")
+    t = store.admin_add_ticket_message(ticket_id, "suporte", corpo)
+    if t is None:
+        raise HTTPException(status_code=404, detail="chamado não encontrado")
+    # Notifica o cliente por e-mail (best-effort).
+    try:
+        if t.get("cliente_email"):
+            mailer.enviar(
+                t["cliente_email"],
+                f"[AtentBot] Resposta no seu chamado #{ticket_id} — {t['assunto']}",
+                f"Você recebeu uma resposta da equipe de suporte:\n\n{corpo}\n\n"
+                f"Acompanhe em {settings.panel_url.rstrip('/')}/suporte.",
+            )
+    except Exception:  # pragma: no cover
+        pass
+    return t
+
+
+@app.patch("/admin/chamados/{ticket_id}")
+def admin_ticket_update(ticket_id: int, req: AdminTicketReq,
+                        admin: TenantCtx = Depends(current_admin)):
+    if req.status is not None and req.status not in _TICKET_STATUS:
+        raise HTTPException(status_code=422, detail="status inválido")
+    if req.prioridade is not None and req.prioridade not in _TICKET_PRIORIDADES:
+        raise HTTPException(status_code=422, detail="prioridade inválida")
+    t = store.admin_set_ticket(ticket_id, req.status, req.prioridade)
     if t is None:
         raise HTTPException(status_code=404, detail="chamado não encontrado")
     return t

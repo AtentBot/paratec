@@ -918,7 +918,7 @@ def get_session(token_hash: str) -> dict | None:
     """Sessão válida (não expirada) + dados do usuário e tenant."""
     rows = query(
         """SELECT s.id, s.user_id, s.expires_at,
-                  u.tenant_id, u.email, u.nome, u.role, u.ativo
+                  u.tenant_id, u.email, u.nome, u.role, u.ativo, u.is_staff
              FROM sessions s JOIN users u ON u.id = s.user_id
             WHERE s.token_hash = %s AND s.expires_at > now() AND u.ativo = true""",
         (token_hash,),
@@ -1155,3 +1155,125 @@ def set_ticket_status(tenant_id: int, ticket_id: int, status: str) -> dict | Non
     if not rows:
         return None
     return get_ticket(tenant_id, ticket_id)
+
+
+# =========================================================================
+# ADMIN (central da equipe Dew) — consultas CROSS-TENANT. Só devem ser
+# chamadas por endpoints protegidos por current_admin (auth.is_staff).
+# =========================================================================
+
+def set_user_staff(email: str, value: bool = True) -> bool:
+    rows = execute(
+        "UPDATE users SET is_staff = %s, updated_at = now() WHERE lower(email) = lower(%s) RETURNING id",
+        (value, email), returning=True,
+    )
+    return bool(rows)
+
+
+def admin_overview() -> dict:
+    return query(
+        """SELECT
+             (SELECT count(*) FROM tenants)                                             AS tenants,
+             (SELECT count(*) FROM subscriptions WHERE status IN ('active','trialing')) AS ativos,
+             (SELECT count(*) FROM tickets WHERE status IN ('aberto','em_andamento'))   AS chamados_abertos,
+             (SELECT COALESCE(SUM(custo_estimado),0) FROM usage_events
+                WHERE created_at >= date_trunc('month', now()))                         AS consumo_mes
+        """
+    )[0]
+
+
+def admin_list_tenants() -> list[dict]:
+    return query(
+        """SELECT t.id, t.nome, t.slug, t.status AS tenant_status, t.created_at,
+                  s.plan, s.status AS sub_status, s.cancel_at_period_end, s.current_period_end,
+                  (SELECT count(*) FROM users u WHERE u.tenant_id = t.id) AS usuarios
+             FROM tenants t LEFT JOIN subscriptions s ON s.tenant_id = t.id
+            ORDER BY t.created_at"""
+    )
+
+
+def admin_set_subscription(tenant_id: int, status: str, plan: str | None = None) -> dict:
+    """Override manual da assinatura (comp/suspensão). Mantém o restante."""
+    return upsert_subscription(tenant_id, status=status, plan=plan)
+
+
+def admin_list_tickets(status: str | None = None, prioridade: str | None = None) -> list[dict]:
+    conds, params = [], []
+    if status:
+        conds.append("tk.status = %s"); params.append(status)
+    if prioridade:
+        conds.append("tk.prioridade = %s"); params.append(prioridade)
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    return query(
+        f"""SELECT tk.id, tk.assunto, tk.categoria, tk.prioridade, tk.status,
+                   tk.created_at, tk.updated_at, t.id AS tenant_id, t.nome AS tenant_nome,
+                   (SELECT count(*) FROM ticket_mensagens m WHERE m.ticket_id = tk.id) AS mensagens
+              FROM tickets tk JOIN tenants t ON t.id = tk.tenant_id
+              {where}
+             ORDER BY (tk.status IN ('resolvido','fechado')),
+                      CASE tk.prioridade WHEN 'alta' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+                      tk.updated_at DESC""",
+        tuple(params),
+    )
+
+
+def admin_get_ticket(ticket_id: int) -> dict | None:
+    rows = query(
+        """SELECT tk.id, tk.tenant_id, tk.assunto, tk.categoria, tk.prioridade, tk.status,
+                  tk.created_at, tk.updated_at, t.nome AS tenant_nome, u.email AS cliente_email
+             FROM tickets tk JOIN tenants t ON t.id = tk.tenant_id
+             LEFT JOIN users u ON u.id = tk.user_id
+            WHERE tk.id = %s""",
+        (ticket_id,),
+    )
+    if not rows:
+        return None
+    tk = rows[0]
+    tk["mensagens"] = query(
+        "SELECT autor, corpo, created_at FROM ticket_mensagens WHERE ticket_id = %s ORDER BY created_at",
+        (ticket_id,),
+    )
+    return tk
+
+
+def admin_add_ticket_message(ticket_id: int, autor: str, corpo: str) -> dict | None:
+    tk = admin_get_ticket(ticket_id)
+    if not tk:
+        return None
+    execute(
+        """INSERT INTO ticket_mensagens (ticket_id, tenant_id, autor, corpo)
+             VALUES (%s, %s, %s, %s)""",
+        (ticket_id, tk["tenant_id"], autor, corpo),
+    )
+    novo = "em_andamento" if autor == "suporte" else "aberto"
+    execute(
+        """UPDATE tickets SET updated_at = now(),
+               status = CASE WHEN status IN ('resolvido','fechado') THEN %s ELSE status END
+             WHERE id = %s""",
+        (novo, ticket_id),
+    )
+    return admin_get_ticket(ticket_id)
+
+
+def admin_set_ticket(ticket_id: int, status: str | None = None,
+                     prioridade: str | None = None) -> dict | None:
+    execute(
+        """UPDATE tickets SET status = COALESCE(%s, status),
+               prioridade = COALESCE(%s, prioridade), updated_at = now()
+             WHERE id = %s""",
+        (status, prioridade, ticket_id),
+    )
+    return admin_get_ticket(ticket_id)
+
+
+def admin_usage_por_tenant() -> list[dict]:
+    return query(
+        """SELECT t.id, t.nome,
+                  COALESCE(SUM(u.tokens),0) AS tokens,
+                  COALESCE(SUM(u.custo_estimado),0) AS custo
+             FROM tenants t
+             LEFT JOIN usage_events u
+               ON u.tenant_id = t.id AND u.created_at >= date_trunc('month', now())
+            GROUP BY t.id, t.nome
+            ORDER BY custo DESC"""
+    )

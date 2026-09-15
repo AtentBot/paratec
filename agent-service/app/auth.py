@@ -140,6 +140,7 @@ class TenantCtx:
     email: str
     nome: str | None
     role: str
+    is_staff: bool = False
 
 
 def current_tenant(request: Request) -> TenantCtx:
@@ -161,4 +162,12 @@ def current_tenant(request: Request) -> TenantCtx:
         email=sess["email"],
         nome=sess.get("nome"),
         role=sess.get("role") or "owner",
+        is_staff=bool(sess.get("is_staff")),
     )
+
+
+def current_admin(tenant: TenantCtx = Depends(current_tenant)) -> TenantCtx:
+    """Dependency da central admin (equipe Dew): exige usuário staff (403 se não)."""
+    if not tenant.is_staff:
+        raise HTTPException(403, "acesso restrito à administração")
+    return tenant

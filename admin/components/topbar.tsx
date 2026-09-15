@@ -20,6 +20,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/configuracoes": { title: "Configurações", sub: "Conexões de WhatsApp" },
   "/assinatura": { title: "Assinatura", sub: "Seu plano e cobrança" },
   "/suporte": { title: "Suporte", sub: "Chamados e contato" },
+  "/admin": { title: "Administração", sub: "Central da equipe (todos os clientes)" },
 };
 
 export function Topbar() {
