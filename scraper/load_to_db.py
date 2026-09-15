@@ -31,11 +31,13 @@ def dsn() -> str:
 
 
 def apply_schema(conn):
-    sql = (ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
+    # Catálogo (base) + operacional/multi-tenant (adiciona tenant_id, defaults e
+    # os índices por tenant que a carga abaixo usa nos ON CONFLICT).
     with conn.cursor() as cur:
-        cur.execute(sql)
+        cur.execute((ROOT / "db" / "schema.sql").read_text(encoding="utf-8"))
+        cur.execute((ROOT / "db" / "schema_ops.sql").read_text(encoding="utf-8"))
     conn.commit()
-    print("[ok] schema aplicado (db/schema.sql)")
+    print("[ok] schema aplicado (db/schema.sql + db/schema_ops.sql)")
 
 
 def slugify(name: str) -> str:
@@ -52,9 +54,11 @@ def load(conn, products):
         cats = sorted({c for p in products for c in p["categories"]})
         cat_id = {}
         for name in cats:
+            # tenant_id vem do DEFAULT (Paratec), setado em db/schema_ops.sql;
+            # o conflito agora é por (tenant_id, name) — catálogo é por tenant.
             cur.execute(
                 """INSERT INTO categories (name, slug) VALUES (%s, %s)
-                   ON CONFLICT (name) DO UPDATE SET slug = EXCLUDED.slug
+                   ON CONFLICT (tenant_id, name) DO UPDATE SET slug = EXCLUDED.slug
                    RETURNING id""",
                 (name, slugify(name)),
             )

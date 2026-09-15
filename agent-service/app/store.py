@@ -2,6 +2,11 @@
 
 Fonte de verdade da tela administrativa. Escreve durante o atendimento
 (ver agents.responder) e lê nos endpoints /conversas, /metrics e /fila.
+
+MULTI-TENANT: toda função operacional recebe `tenant_id` (1º parâmetro) e
+filtra/insere por ele. O isolamento entre clientes é garantido aqui — qualquer
+query sem o filtro de tenant é uma falha de isolamento. Funções de conta
+(tenants/users/sessions/subscriptions/instances) ficam ao final do arquivo.
 """
 from __future__ import annotations
 
@@ -40,37 +45,37 @@ def ensure_schema() -> None:
 CAMPOS_CADASTRO = ("razao_social", "cnpj", "email", "nome_contato")
 
 
-def get_customer(telefone: str) -> dict | None:
+def get_customer(tenant_id: int, telefone: str) -> dict | None:
     rows = query(
         """SELECT telefone, razao_social, cnpj, email, nome_contato,
                   status, opt_out, created_at, updated_at
-             FROM customers WHERE telefone = %s""",
-        (telefone,),
+             FROM customers WHERE tenant_id = %s AND telefone = %s""",
+        (tenant_id, telefone),
     )
     return rows[0] if rows else None
 
 
-def cliente_ativo(telefone: str) -> bool:
-    c = get_customer(telefone)
+def cliente_ativo(tenant_id: int, telefone: str) -> bool:
+    c = get_customer(tenant_id, telefone)
     return bool(c and c["status"] == "ativo")
 
 
-def upsert_customer(telefone: str, **campos) -> dict:
+def upsert_customer(tenant_id: int, telefone: str, **campos) -> dict:
     """Cria/atualiza o cliente com os campos informados (parciais) e recalcula
     o status: 'ativo' quando os 4 campos obrigatórios estão preenchidos."""
     dados = {k: campos.get(k) for k in CAMPOS_CADASTRO}
     execute(
         """
-        INSERT INTO customers (telefone, razao_social, cnpj, email, nome_contato)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (telefone) DO UPDATE SET
+        INSERT INTO customers (tenant_id, telefone, razao_social, cnpj, email, nome_contato)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (tenant_id, telefone) DO UPDATE SET
             razao_social = COALESCE(EXCLUDED.razao_social, customers.razao_social),
             cnpj         = COALESCE(EXCLUDED.cnpj,         customers.cnpj),
             email        = COALESCE(EXCLUDED.email,        customers.email),
             nome_contato = COALESCE(EXCLUDED.nome_contato, customers.nome_contato),
             updated_at   = now()
         """,
-        (telefone, dados["razao_social"], dados["cnpj"], dados["email"], dados["nome_contato"]),
+        (tenant_id, telefone, dados["razao_social"], dados["cnpj"], dados["email"], dados["nome_contato"]),
     )
     # Recalcula status a partir do estado consolidado.
     execute(
@@ -80,64 +85,71 @@ def upsert_customer(telefone: str, **campos) -> dict:
              AND email IS NOT NULL AND nome_contato IS NOT NULL
             THEN 'ativo' ELSE 'pendente' END,
             updated_at = now()
-         WHERE telefone = %s
+         WHERE tenant_id = %s AND telefone = %s
         """,
-        (telefone,),
+        (tenant_id, telefone),
     )
-    return get_customer(telefone)  # type: ignore[return-value]
+    return get_customer(tenant_id, telefone)  # type: ignore[return-value]
 
 
-def list_customers(status: str | None = None, limit: int = 200) -> list[dict]:
-    where = "WHERE status = %s" if status else ""
-    params: tuple = (status, limit) if status else (limit,)
+def list_customers(tenant_id: int, status: str | None = None, limit: int = 200) -> list[dict]:
+    where = "WHERE tenant_id = %s"
+    params: list = [tenant_id]
+    if status:
+        where += " AND status = %s"
+        params.append(status)
+    params.append(limit)
     return query(
         f"""SELECT telefone, razao_social, cnpj, email, nome_contato,
                    status, opt_out, created_at, updated_at
               FROM customers {where}
              ORDER BY created_at DESC LIMIT %s""",
-        params,
+        tuple(params),
     )
 
 
-def set_opt_out(telefone: str, value: bool = True) -> None:
+def set_opt_out(tenant_id: int, telefone: str, value: bool = True) -> None:
     execute(
-        "UPDATE customers SET opt_out = %s, updated_at = now() WHERE telefone = %s",
-        (value, telefone),
+        "UPDATE customers SET opt_out = %s, updated_at = now() WHERE tenant_id = %s AND telefone = %s",
+        (value, tenant_id, telefone),
     )
 
 
 # --- Broadcast (envio em massa) ------------------------------------------
 
+# Segmentos: os subselects também filtram pelo tenant do cliente (c.tenant_id).
 _SEGMENTOS = {
     "todos": "",
     "com_orcamento": (
-        " AND EXISTS (SELECT 1 FROM queue_items q WHERE q.thread_id = c.telefone"
-        " AND q.tipo = 'pedido' AND q.status <> 'concluido')"
+        " AND EXISTS (SELECT 1 FROM queue_items q WHERE q.tenant_id = c.tenant_id"
+        " AND q.thread_id = c.telefone AND q.tipo = 'pedido' AND q.status <> 'concluido')"
     ),
     "novos": " AND c.created_at >= now() - interval '30 days'",
     "recentes": (
-        " AND EXISTS (SELECT 1 FROM conversations cv WHERE cv.thread_id = c.telefone"
-        " AND cv.updated_at >= now() - interval '30 days')"
+        " AND EXISTS (SELECT 1 FROM conversations cv WHERE cv.tenant_id = c.tenant_id"
+        " AND cv.thread_id = c.telefone AND cv.updated_at >= now() - interval '30 days')"
     ),
 }
 
 
-def customers_para_broadcast(segmento: str = "todos") -> list[dict]:
+def customers_para_broadcast(tenant_id: int, segmento: str = "todos") -> list[dict]:
     """Clientes ATIVOS sem opt-out, filtrados pelo segmento (ver _SEGMENTOS)."""
     extra = _SEGMENTOS.get(segmento, "")
     return query(
         f"""SELECT c.telefone, c.razao_social, c.nome_contato FROM customers c
-             WHERE c.status = 'ativo' AND c.opt_out = false AND c.telefone IS NOT NULL
-             {extra}"""
+             WHERE c.tenant_id = %s AND c.status = 'ativo' AND c.opt_out = false
+               AND c.telefone IS NOT NULL
+             {extra}""",
+        (tenant_id,),
     )
 
 
-def contar_segmentos() -> dict:
+def contar_segmentos(tenant_id: int) -> dict:
     """Quantos clientes elegíveis em cada segmento (para a tela de promoções)."""
-    return {seg: len(customers_para_broadcast(seg)) for seg in _SEGMENTOS}
+    return {seg: len(customers_para_broadcast(tenant_id, seg)) for seg in _SEGMENTOS}
 
 
-def customers_por_telefones(telefones: list[str]) -> list[dict]:
+def customers_por_telefones(tenant_id: int, telefones: list[str]) -> list[dict]:
     """Destinatários selecionados manualmente na tela, filtrados por elegibilidade.
 
     Mantém só quem está ATIVO e sem opt-out (respeita quem pediu para não
@@ -148,86 +160,87 @@ def customers_por_telefones(telefones: list[str]) -> list[dict]:
         return []
     return query(
         """SELECT c.telefone, c.razao_social, c.nome_contato FROM customers c
-             WHERE c.status = 'ativo' AND c.opt_out = false
+             WHERE c.tenant_id = %s AND c.status = 'ativo' AND c.opt_out = false
                AND c.telefone = ANY(%s)""",
-        (numeros,),
+        (tenant_id, numeros),
     )
 
 
 def create_broadcast(
-    texto: str, total: int, criado_por: str | None = None, imagem: str | None = None
+    tenant_id: int, texto: str, total: int, criado_por: str | None = None, imagem: str | None = None
 ) -> int:
     return execute(
-        """INSERT INTO broadcasts (texto, total, criado_por, imagem)
-           VALUES (%s, %s, %s, %s) RETURNING id""",
-        (texto, total, criado_por, imagem), returning=True,
+        """INSERT INTO broadcasts (tenant_id, texto, total, criado_por, imagem)
+           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+        (tenant_id, texto, total, criado_por, imagem), returning=True,
     )[0]["id"]
 
 
-def bump_broadcast(bid: int, enviados: int = 0, falhas: int = 0) -> None:
+def bump_broadcast(tenant_id: int, bid: int, enviados: int = 0, falhas: int = 0) -> None:
     execute(
         """UPDATE broadcasts SET enviados = enviados + %s, falhas = falhas + %s,
-               updated_at = now() WHERE id = %s""",
-        (enviados, falhas, bid),
+               updated_at = now() WHERE tenant_id = %s AND id = %s""",
+        (enviados, falhas, tenant_id, bid),
     )
 
 
-def finish_broadcast(bid: int, status: str = "concluido") -> None:
+def finish_broadcast(tenant_id: int, bid: int, status: str = "concluido") -> None:
     execute(
-        "UPDATE broadcasts SET status = %s, updated_at = now() WHERE id = %s",
-        (status, bid),
+        "UPDATE broadcasts SET status = %s, updated_at = now() WHERE tenant_id = %s AND id = %s",
+        (status, tenant_id, bid),
     )
 
 
-def list_broadcasts(limit: int = 50) -> list[dict]:
+def list_broadcasts(tenant_id: int, limit: int = 50) -> list[dict]:
     return query(
         """SELECT id, texto, total, enviados, falhas, status, criado_por, imagem, created_at
-             FROM broadcasts ORDER BY created_at DESC LIMIT %s""",
-        (limit,),
+             FROM broadcasts WHERE tenant_id = %s ORDER BY created_at DESC LIMIT %s""",
+        (tenant_id, limit),
     )
 
 
 # --- Relatórios (por período) --------------------------------------------
 
-def relatorio_resumo(desde: str, ate: str) -> dict:
+def relatorio_resumo(tenant_id: int, desde: str, ate: str) -> dict:
     """Agregados entre `desde` e `ate` (datas YYYY-MM-DD; `ate` inclusivo)."""
-    p = (desde, ate) * 7
+    p = (tenant_id, desde, ate) * 7
     return query(
         """
         SELECT
           (SELECT count(DISTINCT thread_id) FROM events
-             WHERE tipo='mensagem_recebida' AND created_at >= %s AND created_at < (%s::date + 1)) AS atendimentos,
+             WHERE tipo='mensagem_recebida' AND tenant_id=%s AND created_at >= %s AND created_at < (%s::date + 1)) AS atendimentos,
           (SELECT count(*) FROM events
-             WHERE tipo='resolvida' AND created_at >= %s AND created_at < (%s::date + 1)) AS resolvidas,
+             WHERE tipo='resolvida' AND tenant_id=%s AND created_at >= %s AND created_at < (%s::date + 1)) AS resolvidas,
           (SELECT count(*) FROM events
-             WHERE tipo='handoff_humano' AND created_at >= %s AND created_at < (%s::date + 1)) AS handoffs,
+             WHERE tipo='handoff_humano' AND tenant_id=%s AND created_at >= %s AND created_at < (%s::date + 1)) AS handoffs,
           (SELECT count(*) FROM customers
-             WHERE created_at >= %s AND created_at < (%s::date + 1)) AS novos_clientes,
+             WHERE tenant_id=%s AND created_at >= %s AND created_at < (%s::date + 1)) AS novos_clientes,
           (SELECT count(*) FROM queue_items
-             WHERE tipo='pedido' AND created_at >= %s AND created_at < (%s::date + 1)) AS orcamentos,
+             WHERE tipo='pedido' AND tenant_id=%s AND created_at >= %s AND created_at < (%s::date + 1)) AS orcamentos,
           (SELECT count(*) FROM broadcasts
-             WHERE created_at >= %s AND created_at < (%s::date + 1)) AS campanhas,
+             WHERE tenant_id=%s AND created_at >= %s AND created_at < (%s::date + 1)) AS campanhas,
           (SELECT count(*) FROM events
-             WHERE tipo='opt_out' AND created_at >= %s AND created_at < (%s::date + 1)) AS opt_outs
+             WHERE tipo='opt_out' AND tenant_id=%s AND created_at >= %s AND created_at < (%s::date + 1)) AS opt_outs
         """,
         p,
     )[0]
 
 
-def relatorio_conversas(desde: str, ate: str, limit: int = 100000) -> list[dict]:
+def relatorio_conversas(tenant_id: int, desde: str, ate: str, limit: int = 100000) -> list[dict]:
     return query(
         """SELECT thread_id, cliente, telefone, status, especialista, responsavel,
                   created_at, updated_at
              FROM conversations
-            WHERE created_at >= %s AND created_at < (%s::date + 1)
+            WHERE tenant_id = %s AND created_at >= %s AND created_at < (%s::date + 1)
             ORDER BY created_at DESC LIMIT %s""",
-        (desde, ate, limit),
+        (tenant_id, desde, ate, limit),
     )
 
 
 # --- Escrita durante o atendimento ---------------------------------------
 
 def upsert_conversation(
+    tenant_id: int,
     thread_id: str,
     cliente: str | None = None,
     telefone: str | None = None,
@@ -235,28 +248,29 @@ def upsert_conversation(
 ) -> None:
     execute(
         """
-        INSERT INTO conversations (thread_id, cliente, telefone, instancia, updated_at)
-        VALUES (%s, %s, %s, %s, now())
-        ON CONFLICT (thread_id) DO UPDATE
+        INSERT INTO conversations (tenant_id, thread_id, cliente, telefone, instancia, updated_at)
+        VALUES (%s, %s, %s, %s, %s, now())
+        ON CONFLICT (tenant_id, thread_id) DO UPDATE
            SET cliente   = COALESCE(EXCLUDED.cliente, conversations.cliente),
                telefone  = COALESCE(EXCLUDED.telefone, conversations.telefone),
                instancia = COALESCE(EXCLUDED.instancia, conversations.instancia),
                updated_at = now()
         """,
-        (thread_id, cliente, telefone or thread_id, instancia),
+        (tenant_id, thread_id, cliente, telefone or thread_id, instancia),
     )
 
 
 def add_message(
+    tenant_id: int,
     thread_id: str,
     role: str,
     content: str,
     especialista: str | None = None,
 ) -> None:
     execute(
-        """INSERT INTO messages (thread_id, role, content, especialista)
-             VALUES (%s, %s, %s, %s)""",
-        (thread_id, role, content, especialista),
+        """INSERT INTO messages (tenant_id, thread_id, role, content, especialista)
+             VALUES (%s, %s, %s, %s, %s)""",
+        (tenant_id, thread_id, role, content, especialista),
     )
     # Atualiza prévia/roteamento; incrementa não-lidas em mensagens do cliente.
     execute(
@@ -266,56 +280,54 @@ def add_message(
                especialista = COALESCE(%s, especialista),
                unread = CASE WHEN %s = 'cliente' THEN unread + 1 ELSE unread END,
                updated_at = now()
-         WHERE thread_id = %s
+         WHERE tenant_id = %s AND thread_id = %s
         """,
-        (content[:160], especialista, role, thread_id),
+        (content[:160], especialista, role, tenant_id, thread_id),
     )
-    # Notifica assinantes SSE (best-effort; nunca impede a gravação).
-    try:
-        from . import realtime
-
-        realtime.broker.publish(thread_id, {"type": "message", "role": role})
-    except Exception:  # pragma: no cover
-        pass
+    _publish(tenant_id, thread_id, {"type": "message", "role": role})
 
 
-def marcar_lida(thread_id: str) -> dict | None:
+def marcar_lida(tenant_id: int, thread_id: str) -> dict | None:
     """Zera o contador de não-lidas (chamado quando o atendente abre a conversa)."""
     execute(
-        "UPDATE conversations SET unread = 0 WHERE thread_id = %s",
-        (thread_id,),
+        "UPDATE conversations SET unread = 0 WHERE tenant_id = %s AND thread_id = %s",
+        (tenant_id, thread_id),
     )
-    return get_conversation(thread_id)
+    return get_conversation(tenant_id, thread_id)
 
 
 def log_event(
+    tenant_id: int,
     tipo: str,
     thread_id: str | None = None,
     especialista: str | None = None,
     meta: dict | None = None,
 ) -> None:
     execute(
-        """INSERT INTO events (thread_id, tipo, especialista, meta)
-             VALUES (%s, %s, %s, %s)""",
-        (thread_id, tipo, especialista, json.dumps(meta) if meta else None),
+        """INSERT INTO events (tenant_id, thread_id, tipo, especialista, meta)
+             VALUES (%s, %s, %s, %s, %s)""",
+        (tenant_id, thread_id, tipo, especialista, json.dumps(meta) if meta else None),
     )
 
 
-def set_status(thread_id: str, status: str) -> None:
+def set_status(tenant_id: int, thread_id: str, status: str) -> None:
     execute(
-        "UPDATE conversations SET status = %s, updated_at = now() WHERE thread_id = %s",
-        (status, thread_id),
+        "UPDATE conversations SET status = %s, updated_at = now() WHERE tenant_id = %s AND thread_id = %s",
+        (status, tenant_id, thread_id),
     )
 
 
-def get_status(thread_id: str) -> str | None:
+def get_status(tenant_id: int, thread_id: str) -> str | None:
     """Status atual da conversa (ia | humano | resolvida) ou None se não existe.
     Usado pelo /chat para decidir se a IA deve responder automaticamente."""
-    rows = query("SELECT status FROM conversations WHERE thread_id = %s", (thread_id,))
+    rows = query(
+        "SELECT status FROM conversations WHERE tenant_id = %s AND thread_id = %s",
+        (tenant_id, thread_id),
+    )
     return rows[0]["status"] if rows else None
 
 
-def set_bot(thread_id: str, ativo: bool) -> dict | None:
+def set_bot(tenant_id: int, thread_id: str, ativo: bool) -> dict | None:
     """Liga/desliga a resposta automática da IA nesta conversa.
 
     ativo=True  -> status 'ia'     (IA responde automaticamente às mensagens);
@@ -325,21 +337,22 @@ def set_bot(thread_id: str, ativo: bool) -> dict | None:
     não aciona o LLM (ver agents.responder)."""
     if ativo:
         execute(
-            "UPDATE conversations SET status = 'ia', updated_at = now() WHERE thread_id = %s",
-            (thread_id,),
+            "UPDATE conversations SET status = 'ia', updated_at = now() WHERE tenant_id = %s AND thread_id = %s",
+            (tenant_id, thread_id),
         )
-        log_event("retomou_ia", thread_id=thread_id, meta={"origem": "manual"})
+        log_event(tenant_id, "retomou_ia", thread_id=thread_id, meta={"origem": "manual"})
     else:
         execute(
             """UPDATE conversations SET status = 'humano', unread = 0, updated_at = now()
-                 WHERE thread_id = %s""",
-            (thread_id,),
+                 WHERE tenant_id = %s AND thread_id = %s""",
+            (tenant_id, thread_id),
         )
-        log_event("handoff_humano", thread_id=thread_id, meta={"origem": "manual"})
-    return get_conversation(thread_id)
+        log_event(tenant_id, "handoff_humano", thread_id=thread_id, meta={"origem": "manual"})
+    return get_conversation(tenant_id, thread_id)
 
 
 def add_queue_item(
+    tenant_id: int,
     tipo: str,
     resumo: str,
     thread_id: str | None = None,
@@ -349,11 +362,11 @@ def add_queue_item(
 ) -> int:
     rows = execute(
         """
-        INSERT INTO queue_items (tipo, thread_id, cliente, telefone, resumo, payload)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO queue_items (tenant_id, tipo, thread_id, cliente, telefone, resumo, payload)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
-        (tipo, thread_id, cliente, telefone, resumo, json.dumps(payload) if payload else None),
+        (tenant_id, tipo, thread_id, cliente, telefone, resumo, json.dumps(payload) if payload else None),
         returning=True,
     )
     return rows[0]["id"]
@@ -362,9 +375,10 @@ def add_queue_item(
 # --- Leitura (endpoints da tela adm) -------------------------------------
 
 def list_conversations(
-    status: str | None = None, q: str | None = None, limit: int = 100
+    tenant_id: int, status: str | None = None, q: str | None = None, limit: int = 100
 ) -> list[dict]:
-    conds, params = [], []
+    conds = ["tenant_id = %s"]
+    params: list = [tenant_id]
     if status:
         conds.append("status = %s")
         params.append(status)
@@ -372,7 +386,7 @@ def list_conversations(
         like = f"%{q}%"
         conds.append("(cliente ILIKE %s OR telefone ILIKE %s OR thread_id ILIKE %s)")
         params += [like, like, like]
-    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    where = "WHERE " + " AND ".join(conds)
     params.append(limit)
     return query(
         f"""
@@ -387,92 +401,93 @@ def list_conversations(
     )
 
 
-def unread_total() -> int:
-    """Soma de mensagens não-lidas em todas as conversas (indicador global)."""
-    rows = query("SELECT COALESCE(SUM(unread), 0) AS n FROM conversations")
+def unread_total(tenant_id: int) -> int:
+    """Soma de mensagens não-lidas nas conversas do tenant (indicador global)."""
+    rows = query(
+        "SELECT COALESCE(SUM(unread), 0) AS n FROM conversations WHERE tenant_id = %s",
+        (tenant_id,),
+    )
     return int(rows[0]["n"]) if rows else 0
 
 
-def get_conversation(thread_id: str) -> dict | None:
+def get_conversation(tenant_id: int, thread_id: str) -> dict | None:
     rows = query(
         """SELECT thread_id, cliente, telefone, instancia, status, especialista, unread,
                   last_preview, responsavel, created_at, updated_at
-             FROM conversations WHERE thread_id = %s""",
-        (thread_id,),
+             FROM conversations WHERE tenant_id = %s AND thread_id = %s""",
+        (tenant_id, thread_id),
     )
     if not rows:
         return None
     conv = rows[0]
     conv["mensagens"] = query(
         """SELECT role, content, especialista, created_at
-             FROM messages WHERE thread_id = %s ORDER BY created_at""",
-        (thread_id,),
+             FROM messages WHERE tenant_id = %s AND thread_id = %s ORDER BY created_at""",
+        (tenant_id, thread_id),
     )
     return conv
 
 
-def add_note(thread_id: str, texto: str, autor: str | None = None) -> None:
+def add_note(tenant_id: int, thread_id: str, texto: str, autor: str | None = None) -> None:
     """Nota interna (não vai ao cliente); não altera prévia/não-lidas."""
     conteudo = f"[{autor}] {texto}" if autor else texto
     execute(
-        """INSERT INTO messages (thread_id, role, content) VALUES (%s, 'nota', %s)""",
-        (thread_id, conteudo),
+        """INSERT INTO messages (tenant_id, thread_id, role, content) VALUES (%s, %s, 'nota', %s)""",
+        (tenant_id, thread_id, conteudo),
     )
-    execute("UPDATE conversations SET updated_at = now() WHERE thread_id = %s", (thread_id,))
-    # Notifica assinantes SSE (nota também aparece em tempo real para outros atendentes).
-    try:
-        from . import realtime
-
-        realtime.broker.publish(thread_id, {"type": "message", "role": "nota"})
-    except Exception:  # pragma: no cover
-        pass
-
-
-def set_responsavel(thread_id: str, responsavel: str | None) -> dict | None:
     execute(
-        "UPDATE conversations SET responsavel = %s, updated_at = now() WHERE thread_id = %s",
-        (responsavel, thread_id),
+        "UPDATE conversations SET updated_at = now() WHERE tenant_id = %s AND thread_id = %s",
+        (tenant_id, thread_id),
     )
-    return get_conversation(thread_id)
+    _publish(tenant_id, thread_id, {"type": "message", "role": "nota"})
 
 
-def assumir_conversation(thread_id: str) -> dict | None:
+def set_responsavel(tenant_id: int, thread_id: str, responsavel: str | None) -> dict | None:
+    execute(
+        "UPDATE conversations SET responsavel = %s, updated_at = now() WHERE tenant_id = %s AND thread_id = %s",
+        (responsavel, tenant_id, thread_id),
+    )
+    return get_conversation(tenant_id, thread_id)
+
+
+def assumir_conversation(tenant_id: int, thread_id: str) -> dict | None:
     execute(
         """UPDATE conversations SET status = 'humano', unread = 0, updated_at = now()
-             WHERE thread_id = %s""",
-        (thread_id,),
+             WHERE tenant_id = %s AND thread_id = %s""",
+        (tenant_id, thread_id),
     )
-    log_event("handoff_humano", thread_id=thread_id, meta={"origem": "manual"})
-    return get_conversation(thread_id)
+    log_event(tenant_id, "handoff_humano", thread_id=thread_id, meta={"origem": "manual"})
+    return get_conversation(tenant_id, thread_id)
 
 
-def resolver_conversation(thread_id: str) -> dict | None:
+def resolver_conversation(tenant_id: int, thread_id: str) -> dict | None:
     execute(
         """UPDATE conversations SET status = 'resolvida', unread = 0, updated_at = now()
-             WHERE thread_id = %s""",
-        (thread_id,),
+             WHERE tenant_id = %s AND thread_id = %s""",
+        (tenant_id, thread_id),
     )
-    log_event("resolvida", thread_id=thread_id, meta={"origem": "manual"})
-    return get_conversation(thread_id)
+    log_event(tenant_id, "resolvida", thread_id=thread_id, meta={"origem": "manual"})
+    return get_conversation(tenant_id, thread_id)
 
 
-def reabrir_conversation(thread_id: str) -> dict | None:
+def reabrir_conversation(tenant_id: int, thread_id: str) -> dict | None:
     execute(
-        "UPDATE conversations SET status = 'humano', updated_at = now() WHERE thread_id = %s",
-        (thread_id,),
+        "UPDATE conversations SET status = 'humano', updated_at = now() WHERE tenant_id = %s AND thread_id = %s",
+        (tenant_id, thread_id),
     )
-    return get_conversation(thread_id)
+    return get_conversation(tenant_id, thread_id)
 
 
-def list_queue(tipo: str | None = None, status: str | None = None) -> list[dict]:
-    conds, params = [], []
+def list_queue(tenant_id: int, tipo: str | None = None, status: str | None = None) -> list[dict]:
+    conds = ["tenant_id = %s"]
+    params: list = [tenant_id]
     if tipo:
         conds.append("tipo = %s")
         params.append(tipo)
     if status:
         conds.append("status = %s")
         params.append(status)
-    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    where = "WHERE " + " AND ".join(conds)
     return query(
         f"""
         SELECT id, tipo, thread_id, cliente, telefone, resumo, status,
@@ -486,6 +501,7 @@ def list_queue(tipo: str | None = None, status: str | None = None) -> list[dict]
 
 
 def update_queue_item(
+    tenant_id: int,
     item_id: int,
     status: str | None = None,
     responsavel: str | None = None,
@@ -496,11 +512,11 @@ def update_queue_item(
            SET status = COALESCE(%s, status),
                responsavel = COALESCE(%s, responsavel),
                updated_at = now()
-         WHERE id = %s
+         WHERE tenant_id = %s AND id = %s
         RETURNING id, tipo, thread_id, cliente, telefone, resumo, status,
                   responsavel, payload, created_at, updated_at
         """,
-        (status, responsavel, item_id),
+        (status, responsavel, tenant_id, item_id),
         returning=True,
     )
     return rows[0] if rows else None
@@ -511,29 +527,35 @@ def update_queue_item(
 _SELLER_COLS = "id, nome, telefone, email, ativo, created_at, updated_at"
 
 
-def list_sellers(only_ativo: bool = False) -> list[dict]:
-    where = "WHERE ativo = true" if only_ativo else ""
-    return query(f"SELECT {_SELLER_COLS} FROM sellers {where} ORDER BY nome")
+def list_sellers(tenant_id: int, only_ativo: bool = False) -> list[dict]:
+    where = "WHERE tenant_id = %s"
+    if only_ativo:
+        where += " AND ativo = true"
+    return query(f"SELECT {_SELLER_COLS} FROM sellers {where} ORDER BY nome", (tenant_id,))
 
 
-def get_seller(seller_id: int) -> dict | None:
-    rows = query(f"SELECT {_SELLER_COLS} FROM sellers WHERE id = %s", (seller_id,))
+def get_seller(tenant_id: int, seller_id: int) -> dict | None:
+    rows = query(
+        f"SELECT {_SELLER_COLS} FROM sellers WHERE tenant_id = %s AND id = %s",
+        (tenant_id, seller_id),
+    )
     return rows[0] if rows else None
 
 
 def create_seller(
-    nome: str, telefone: str, email: str | None = None, ativo: bool = True
+    tenant_id: int, nome: str, telefone: str, email: str | None = None, ativo: bool = True
 ) -> dict:
     rows = execute(
-        f"""INSERT INTO sellers (nome, telefone, email, ativo)
-             VALUES (%s, %s, %s, %s) RETURNING {_SELLER_COLS}""",
-        (nome, telefone, email, ativo),
+        f"""INSERT INTO sellers (tenant_id, nome, telefone, email, ativo)
+             VALUES (%s, %s, %s, %s, %s) RETURNING {_SELLER_COLS}""",
+        (tenant_id, nome, telefone, email, ativo),
         returning=True,
     )
     return rows[0]
 
 
 def update_seller(
+    tenant_id: int,
     seller_id: int,
     nome: str | None = None,
     telefone: str | None = None,
@@ -548,18 +570,19 @@ def update_seller(
             email    = COALESCE(%s, email),
             ativo    = COALESCE(%s, ativo),
             updated_at = now()
-         WHERE id = %s
+         WHERE tenant_id = %s AND id = %s
         RETURNING {_SELLER_COLS}
         """,
-        (nome, telefone, email, ativo, seller_id),
+        (nome, telefone, email, ativo, tenant_id, seller_id),
         returning=True,
     )
     return rows[0] if rows else None
 
 
-def delete_seller(seller_id: int) -> bool:
+def delete_seller(tenant_id: int, seller_id: int) -> bool:
     rows = execute(
-        "DELETE FROM sellers WHERE id = %s RETURNING id", (seller_id,), returning=True
+        "DELETE FROM sellers WHERE tenant_id = %s AND id = %s RETURNING id",
+        (tenant_id, seller_id), returning=True,
     )
     return bool(rows)
 
@@ -567,28 +590,58 @@ def delete_seller(seller_id: int) -> bool:
 # --- Agentes (multi-agente por número de WhatsApp) ------------------------
 
 _AGENT_COLS = (
-    "id, nome, descricao, instancia, persona, capacidades, ativo, is_default, "
+    "id, tenant_id, nome, descricao, instancia, persona, capacidades, ativo, is_default, "
     "created_at, updated_at"
 )
 
 
-def list_agents() -> list[dict]:
+def list_agents(tenant_id: int) -> list[dict]:
     # Padrão sempre primeiro; demais por nome.
-    return query(f"SELECT {_AGENT_COLS} FROM agents ORDER BY is_default DESC, nome")
+    return query(
+        f"SELECT {_AGENT_COLS} FROM agents WHERE tenant_id = %s ORDER BY is_default DESC, nome",
+        (tenant_id,),
+    )
 
 
-def get_default_agent() -> dict | None:
-    rows = query(f"SELECT {_AGENT_COLS} FROM agents WHERE is_default LIMIT 1")
+def get_default_agent(tenant_id: int) -> dict | None:
+    rows = query(
+        f"SELECT {_AGENT_COLS} FROM agents WHERE tenant_id = %s AND is_default LIMIT 1",
+        (tenant_id,),
+    )
     return rows[0] if rows else None
 
 
-def get_agent(agent_id: int) -> dict | None:
-    rows = query(f"SELECT {_AGENT_COLS} FROM agents WHERE id = %s", (agent_id,))
+def ensure_default_agent(tenant_id: int) -> dict:
+    """Garante que o tenant tenha um agente padrão (catch-all). Idempotente —
+    chamado ao criar um tenant novo (o da Paratec é semeado no schema)."""
+    existing = get_default_agent(tenant_id)
+    if existing:
+        return existing
+    rows = execute(
+        f"""INSERT INTO agents (tenant_id, nome, descricao, persona, capacidades, ativo, is_default)
+             VALUES (%s, 'Agente padrão',
+                     'Atende todos os números que não têm um agente próprio.',
+                     NULL, ARRAY['catalogo','pedidos','entrega','boletos','conhecimento'],
+                     true, true)
+             RETURNING {_AGENT_COLS}""",
+        (tenant_id,),
+        returning=True,
+    )
+    return rows[0]
+
+
+def get_agent(tenant_id: int, agent_id: int) -> dict | None:
+    rows = query(
+        f"SELECT {_AGENT_COLS} FROM agents WHERE tenant_id = %s AND id = %s",
+        (tenant_id, agent_id),
+    )
     return rows[0] if rows else None
 
 
 def get_agent_by_instancia(instancia: str) -> dict | None:
-    """Agente ATIVO amarrado a esta instância Evolution (número de WhatsApp)."""
+    """Agente ATIVO amarrado a esta instância Evolution (número de WhatsApp).
+    A instância é única global, então não precisa de tenant_id — mas o resultado
+    inclui tenant_id (usado para resolver o tenant no caminho /chat)."""
     rows = query(
         f"SELECT {_AGENT_COLS} FROM agents WHERE instancia = %s AND ativo = true",
         (instancia,),
@@ -597,6 +650,7 @@ def get_agent_by_instancia(instancia: str) -> dict | None:
 
 
 def create_agent(
+    tenant_id: int,
     nome: str,
     descricao: str | None,
     instancia: str | None,
@@ -605,15 +659,16 @@ def create_agent(
     ativo: bool = True,
 ) -> dict:
     rows = execute(
-        f"""INSERT INTO agents (nome, descricao, instancia, persona, capacidades, ativo)
-             VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_AGENT_COLS}""",
-        (nome, descricao, instancia or None, persona, capacidades, ativo),
+        f"""INSERT INTO agents (tenant_id, nome, descricao, instancia, persona, capacidades, ativo)
+             VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_AGENT_COLS}""",
+        (tenant_id, nome, descricao, instancia or None, persona, capacidades, ativo),
         returning=True,
     )
     return rows[0]
 
 
 def update_agent(
+    tenant_id: int,
     agent_id: int,
     nome: str | None = None,
     descricao: str | None = None,
@@ -630,7 +685,7 @@ def update_agent(
     params: list = [nome, descricao]
     if not limpar_instancia:
         params.append(instancia or None)
-    params += [persona, capacidades, ativo, agent_id]
+    params += [persona, capacidades, ativo, tenant_id, agent_id]
     rows = execute(
         f"""
         UPDATE agents SET
@@ -641,7 +696,7 @@ def update_agent(
             capacidades = COALESCE(%s, capacidades),
             ativo       = COALESCE(%s, ativo),
             updated_at  = now()
-         WHERE id = %s
+         WHERE tenant_id = %s AND id = %s
         RETURNING {_AGENT_COLS}
         """,
         tuple(params),
@@ -650,17 +705,18 @@ def update_agent(
     return rows[0] if rows else None
 
 
-def delete_agent(agent_id: int) -> bool:
+def delete_agent(tenant_id: int, agent_id: int) -> bool:
     rows = execute(
-        "DELETE FROM agents WHERE id = %s RETURNING id", (agent_id,), returning=True
+        "DELETE FROM agents WHERE tenant_id = %s AND id = %s AND is_default = false RETURNING id",
+        (tenant_id, agent_id), returning=True,
     )
     return bool(rows)
 
 
 # --- Métricas (dashboard) -------------------------------------------------
 
-def metrics_overview() -> dict:
-    """Agrega eventos/fila para os cards e gráficos do dashboard."""
+def metrics_overview(tenant_id: int) -> dict:
+    """Agrega eventos/fila para os cards e gráficos do dashboard (por tenant)."""
     # Volume por dia (últimos 7 dias): atendimentos = conversas com mensagem
     # recebida; humano = handoffs. generate_series garante os 7 dias mesmo sem dados.
     semana = query(
@@ -676,39 +732,42 @@ def metrics_overview() -> dict:
           FROM dias d
           LEFT JOIN (
             SELECT created_at::date AS dia, count(DISTINCT thread_id) AS n
-              FROM events WHERE tipo = 'mensagem_recebida'
+              FROM events WHERE tipo = 'mensagem_recebida' AND tenant_id = %s
              GROUP BY 1
           ) a ON a.dia = d.dia
           LEFT JOIN (
             SELECT created_at::date AS dia, count(*) AS n
-              FROM events WHERE tipo = 'handoff_humano'
+              FROM events WHERE tipo = 'handoff_humano' AND tenant_id = %s
              GROUP BY 1
           ) h ON h.dia = d.dia
          ORDER BY d.dia
-        """
+        """,
+        (tenant_id, tenant_id),
     )
     especialistas = query(
         """SELECT especialista AS nome, count(*) AS valor
              FROM events
-            WHERE tipo = 'roteou_especialista' AND especialista IS NOT NULL
-            GROUP BY especialista ORDER BY valor DESC"""
+            WHERE tipo = 'roteou_especialista' AND especialista IS NOT NULL AND tenant_id = %s
+            GROUP BY especialista ORDER BY valor DESC""",
+        (tenant_id,),
     )
     totais = query(
         """
         SELECT
-          (SELECT count(*) FROM conversations)                                AS conversas,
-          (SELECT count(*) FROM events WHERE tipo = 'mensagem_recebida')      AS atendimentos,
-          (SELECT count(*) FROM events WHERE tipo = 'handoff_humano')         AS handoffs,
-          (SELECT count(*) FROM queue_items WHERE status <> 'concluido')      AS na_fila,
-          (SELECT count(*) FROM conversations WHERE status <> 'resolvida')    AS abertas,
-          (SELECT count(*) FROM conversations WHERE status = 'resolvida')     AS resolvidas,
-          (SELECT count(*) FROM customers)                                    AS clientes_total,
-          (SELECT count(*) FROM customers WHERE status = 'ativo')             AS clientes_ativos,
-          (SELECT count(*) FROM customers WHERE opt_out)                      AS opt_outs,
+          (SELECT count(*) FROM conversations WHERE tenant_id=%s)                          AS conversas,
+          (SELECT count(*) FROM events WHERE tipo='mensagem_recebida' AND tenant_id=%s)    AS atendimentos,
+          (SELECT count(*) FROM events WHERE tipo='handoff_humano' AND tenant_id=%s)       AS handoffs,
+          (SELECT count(*) FROM queue_items WHERE status<>'concluido' AND tenant_id=%s)    AS na_fila,
+          (SELECT count(*) FROM conversations WHERE status<>'resolvida' AND tenant_id=%s)  AS abertas,
+          (SELECT count(*) FROM conversations WHERE status='resolvida' AND tenant_id=%s)   AS resolvidas,
+          (SELECT count(*) FROM customers WHERE tenant_id=%s)                              AS clientes_total,
+          (SELECT count(*) FROM customers WHERE status='ativo' AND tenant_id=%s)           AS clientes_ativos,
+          (SELECT count(*) FROM customers WHERE opt_out AND tenant_id=%s)                  AS opt_outs,
           (SELECT count(*) FROM queue_items
-             WHERE tipo = 'pedido' AND status <> 'concluido')                 AS orcamentos_abertos,
-          (SELECT count(*) FROM broadcasts)                                   AS campanhas
-        """
+             WHERE tipo='pedido' AND status<>'concluido' AND tenant_id=%s)                 AS orcamentos_abertos,
+          (SELECT count(*) FROM broadcasts WHERE tenant_id=%s)                             AS campanhas
+        """,
+        (tenant_id,) * 11,
     )[0]
     atend = totais["atendimentos"] or 0
     handoffs = totais["handoffs"] or 0
@@ -716,3 +775,270 @@ def metrics_overview() -> dict:
         round((atend - handoffs) / atend * 100) if atend else 0
     )
     return {"semana": semana, "especialistas": especialistas, "totais": totais}
+
+
+# =========================================================================
+# CONTAS: tenants, usuários, sessões, assinaturas, instâncias
+# =========================================================================
+
+def _publish(tenant_id: int, thread_id: str, payload: dict) -> None:
+    """Publica evento SSE em canal namespaced por tenant (best-effort)."""
+    try:
+        from . import realtime
+
+        realtime.broker.publish(f"{tenant_id}:{thread_id}", payload)
+    except Exception:  # pragma: no cover
+        pass
+
+
+# --- Tenants --------------------------------------------------------------
+
+def create_tenant(slug: str, nome: str) -> dict:
+    rows = execute(
+        """INSERT INTO tenants (slug, nome) VALUES (%s, %s)
+             RETURNING id, slug, nome, status, stripe_customer_id, created_at""",
+        (slug, nome), returning=True,
+    )
+    return rows[0]
+
+
+def get_tenant(tenant_id: int) -> dict | None:
+    rows = query(
+        "SELECT id, slug, nome, status, stripe_customer_id, created_at FROM tenants WHERE id = %s",
+        (tenant_id,),
+    )
+    return rows[0] if rows else None
+
+
+def get_tenant_by_slug(slug: str) -> dict | None:
+    rows = query(
+        "SELECT id, slug, nome, status, stripe_customer_id, created_at FROM tenants WHERE slug = %s",
+        (slug,),
+    )
+    return rows[0] if rows else None
+
+
+def get_tenant_by_instancia(instancia: str) -> int | None:
+    """tenant_id dono desta instância Evolution (ou None se não mapeada)."""
+    rows = query("SELECT tenant_id FROM instances WHERE instancia = %s", (instancia,))
+    return int(rows[0]["tenant_id"]) if rows else None
+
+
+def set_tenant_stripe_customer(tenant_id: int, customer_id: str) -> None:
+    execute(
+        "UPDATE tenants SET stripe_customer_id = %s, updated_at = now() WHERE id = %s",
+        (customer_id, tenant_id),
+    )
+
+
+# --- Instâncias -----------------------------------------------------------
+
+def register_instance(tenant_id: int, instancia: str) -> None:
+    execute(
+        """INSERT INTO instances (instancia, tenant_id) VALUES (%s, %s)
+             ON CONFLICT (instancia) DO UPDATE SET tenant_id = EXCLUDED.tenant_id""",
+        (instancia, tenant_id),
+    )
+
+
+def unregister_instance(tenant_id: int, instancia: str) -> None:
+    execute(
+        "DELETE FROM instances WHERE tenant_id = %s AND instancia = %s",
+        (tenant_id, instancia),
+    )
+
+
+# --- Usuários -------------------------------------------------------------
+
+def create_user(
+    tenant_id: int, email: str, password_hash: str, nome: str | None = None, role: str = "owner"
+) -> dict:
+    rows = execute(
+        """INSERT INTO users (tenant_id, email, password_hash, nome, role)
+             VALUES (%s, %s, %s, %s, %s)
+             RETURNING id, tenant_id, email, nome, role, ativo, created_at""",
+        (tenant_id, email, password_hash, nome, role), returning=True,
+    )
+    return rows[0]
+
+
+def get_user_by_email(email: str) -> dict | None:
+    """Inclui password_hash (para o login) e tenant_id."""
+    rows = query(
+        """SELECT id, tenant_id, email, password_hash, nome, role, ativo
+             FROM users WHERE lower(email) = lower(%s)""",
+        (email,),
+    )
+    return rows[0] if rows else None
+
+
+def get_user(user_id: int) -> dict | None:
+    rows = query(
+        "SELECT id, tenant_id, email, nome, role, ativo FROM users WHERE id = %s",
+        (user_id,),
+    )
+    return rows[0] if rows else None
+
+
+# --- Sessões --------------------------------------------------------------
+
+def create_session(user_id: int, token_hash: str, expires_at) -> None:
+    execute(
+        "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+        (user_id, token_hash, expires_at),
+    )
+
+
+def get_session(token_hash: str) -> dict | None:
+    """Sessão válida (não expirada) + dados do usuário e tenant."""
+    rows = query(
+        """SELECT s.id, s.user_id, s.expires_at,
+                  u.tenant_id, u.email, u.nome, u.role, u.ativo
+             FROM sessions s JOIN users u ON u.id = s.user_id
+            WHERE s.token_hash = %s AND s.expires_at > now() AND u.ativo = true""",
+        (token_hash,),
+    )
+    return rows[0] if rows else None
+
+
+def touch_session(token_hash: str) -> None:
+    execute(
+        "UPDATE sessions SET last_seen_at = now() WHERE token_hash = %s",
+        (token_hash,),
+    )
+
+
+def delete_session(token_hash: str) -> None:
+    execute("DELETE FROM sessions WHERE token_hash = %s", (token_hash,))
+
+
+# --- Assinaturas ----------------------------------------------------------
+
+def upsert_subscription(
+    tenant_id: int,
+    *,
+    stripe_subscription_id: str | None = None,
+    stripe_customer_id: str | None = None,
+    plan: str | None = None,
+    stripe_price_id: str | None = None,
+    status: str | None = None,
+    cancel_at_period_end: bool | None = None,
+    current_period_end=None,
+) -> dict:
+    """Cria/atualiza a assinatura do tenant (1 por tenant). COALESCE mantém os
+    campos não informados."""
+    rows = execute(
+        """
+        INSERT INTO subscriptions
+            (tenant_id, stripe_subscription_id, stripe_customer_id, plan,
+             stripe_price_id, status, cancel_at_period_end, current_period_end)
+        VALUES (%s, %s, %s, %s, %s, COALESCE(%s,'incomplete'), COALESCE(%s,false), %s)
+        ON CONFLICT (tenant_id) DO UPDATE SET
+            stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, subscriptions.stripe_subscription_id),
+            stripe_customer_id     = COALESCE(EXCLUDED.stripe_customer_id, subscriptions.stripe_customer_id),
+            plan                   = COALESCE(EXCLUDED.plan, subscriptions.plan),
+            stripe_price_id        = COALESCE(EXCLUDED.stripe_price_id, subscriptions.stripe_price_id),
+            status                 = COALESCE(%s, subscriptions.status),
+            cancel_at_period_end   = COALESCE(%s, subscriptions.cancel_at_period_end),
+            current_period_end     = COALESCE(EXCLUDED.current_period_end, subscriptions.current_period_end),
+            updated_at             = now()
+        RETURNING tenant_id, stripe_subscription_id, stripe_customer_id, plan,
+                  stripe_price_id, status, cancel_at_period_end, current_period_end
+        """,
+        (tenant_id, stripe_subscription_id, stripe_customer_id, plan, stripe_price_id,
+         status, cancel_at_period_end, current_period_end, status, cancel_at_period_end),
+        returning=True,
+    )
+    return rows[0]
+
+
+def get_subscription(tenant_id: int) -> dict | None:
+    rows = query(
+        """SELECT tenant_id, stripe_subscription_id, stripe_customer_id, plan,
+                  stripe_price_id, status, cancel_at_period_end, current_period_end
+             FROM subscriptions WHERE tenant_id = %s""",
+        (tenant_id,),
+    )
+    return rows[0] if rows else None
+
+
+def get_subscription_tenant_by_customer(stripe_customer_id: str) -> int | None:
+    rows = query(
+        "SELECT tenant_id FROM subscriptions WHERE stripe_customer_id = %s",
+        (stripe_customer_id,),
+    )
+    if rows:
+        return int(rows[0]["tenant_id"])
+    # fallback: pelo customer gravado no tenant (antes do 1º webhook de subscription)
+    rows = query("SELECT id FROM tenants WHERE stripe_customer_id = %s", (stripe_customer_id,))
+    return int(rows[0]["id"]) if rows else None
+
+
+# --- Idempotência de webhooks --------------------------------------------
+
+def stripe_event_seen(event_id: str, tipo: str | None = None) -> bool:
+    """Registra o evento; retorna True se JÁ foi visto antes (deve ser ignorado)."""
+    rows = execute(
+        "INSERT INTO stripe_events (id, type) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING RETURNING id",
+        (event_id, tipo), returning=True,
+    )
+    return not rows  # sem linha inserida = conflito = já visto
+
+
+# --- Medição de consumo (pay-per-use por tokens) --------------------------
+
+def record_usage(
+    tenant_id: int, tipo: str, tokens: int, custo_estimado: float, meta: dict | None = None
+) -> None:
+    """Registra um evento de consumo (best-effort — nunca deve quebrar o fluxo)."""
+    if tokens <= 0:
+        return
+    execute(
+        """INSERT INTO usage_events (tenant_id, tipo, tokens, custo_estimado, meta)
+             VALUES (%s, %s, %s, %s, %s)""",
+        (tenant_id, tipo, int(tokens), custo_estimado, json.dumps(meta) if meta else None),
+    )
+
+
+def usage_periodo(tenant_id: int) -> dict:
+    """Resumo do consumo do MÊS corrente (total + quebra por tipo)."""
+    total = query(
+        """SELECT COALESCE(SUM(tokens),0) AS tokens,
+                  COALESCE(SUM(custo_estimado),0) AS custo,
+                  count(*) AS eventos
+             FROM usage_events
+            WHERE tenant_id = %s AND created_at >= date_trunc('month', now())""",
+        (tenant_id,),
+    )[0]
+    por_tipo = query(
+        """SELECT tipo, COALESCE(SUM(tokens),0) AS tokens,
+                  COALESCE(SUM(custo_estimado),0) AS custo, count(*) AS eventos
+             FROM usage_events
+            WHERE tenant_id = %s AND created_at >= date_trunc('month', now())
+            GROUP BY tipo ORDER BY custo DESC""",
+        (tenant_id,),
+    )
+    return {"tokens": int(total["tokens"]), "custo": float(total["custo"]),
+            "eventos": int(total["eventos"]), "por_tipo": por_tipo}
+
+
+def usage_recentes(tenant_id: int, limit: int = 20) -> list[dict]:
+    return query(
+        """SELECT tipo, tokens, custo_estimado, meta, created_at
+             FROM usage_events WHERE tenant_id = %s
+            ORDER BY created_at DESC LIMIT %s""",
+        (tenant_id, limit),
+    )
+
+
+# --- Pesquisa de cancelamento --------------------------------------------
+
+def record_cancellation_feedback(
+    tenant_id: int, respostas: dict | None, comentario: str | None
+) -> None:
+    """Guarda a pesquisa de cancelamento (motivos + relato). Best-effort."""
+    execute(
+        """INSERT INTO cancellation_feedback (tenant_id, respostas, comentario)
+             VALUES (%s, %s, %s)""",
+        (tenant_id, json.dumps(respostas) if respostas else None, comentario),
+    )

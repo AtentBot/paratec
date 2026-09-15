@@ -214,17 +214,17 @@ def _build_agent(persona: str | None, capacidades: tuple[str, ...]):
     )
 
 
-def _agent_para(instancia: str | None):
-    """Escolhe o app do agente que atende a instância (número).
+def _agent_para(tenant_id: int, instancia: str | None):
+    """Escolhe o app do agente que atende a instância (número), dentro do tenant.
 
-    Ordem: agente amarrado ao número → agente PADRÃO do banco (editável na tela
+    Ordem: agente amarrado ao número → agente PADRÃO do tenant (editável na tela
     de Agentes) → agente hardcoded (get_app), só se não houver padrão no banco."""
     cfg = None
     try:
         if instancia:
             cfg = store.get_agent_by_instancia(instancia)
         if cfg is None:
-            cfg = store.get_default_agent()
+            cfg = store.get_default_agent(tenant_id)
     except Exception as e:  # pragma: no cover
         log.warning("falha ao resolver agente da instância %s: %s", instancia, e)
         cfg = None
@@ -257,9 +257,9 @@ def _extrair_texto(content) -> str:
 
 
 def _notificar_vendedores(
-    cliente: str | None, telefone: str | None, resumos: list[str]
+    tenant_id: int, marca: str, cliente: str | None, telefone: str | None, resumos: list[str]
 ) -> None:
-    """Alerta (WhatsApp) TODOS os vendedores ativos sobre um novo orçamento.
+    """Alerta (WhatsApp) TODOS os vendedores ativos do tenant sobre um novo orçamento.
 
     Distribuição "primeiro que pegar assume": o alerta vai para toda a equipe;
     quem entrar no painel e assumir a conversa primeiro fica com ela. O envio
@@ -269,7 +269,7 @@ def _notificar_vendedores(
     if not settings.evolution_configured:
         return
     try:
-        vendedores = store.list_sellers(only_ativo=True)
+        vendedores = store.list_sellers(tenant_id, only_ativo=True)
     except Exception as e:  # pragma: no cover
         log.warning("não foi possível listar vendedores p/ alerta: %s", e)
         return
@@ -279,7 +279,7 @@ def _notificar_vendedores(
     nome_cli = cliente or telefone or "cliente"
     resumo = "; ".join(r for r in resumos if r) or "novo pedido de orçamento"
     texto = (
-        "🔔 *Novo orçamento — Paratec*\n\n"
+        f"🔔 *Novo orçamento — {marca}*\n\n"
         f"Cliente: {nome_cli}\n"
         f"WhatsApp: {telefone or '—'}\n"
         f"Resumo: {resumo}\n\n"
@@ -295,6 +295,18 @@ def _notificar_vendedores(
                 log.warning("alerta ao vendedor %s falhou: %s", v.get("telefone"), e)
 
     threading.Thread(target=_run, name="alerta-vendedores", daemon=True).start()
+
+
+def _somar_tokens(messages) -> int:
+    """Soma os tokens (input+output) das mensagens do LLM nesta resposta, via
+    usage_metadata do LangChain. Base da cobrança pay-per-use de conversa."""
+    total = 0
+    for m in messages:
+        um = getattr(m, "usage_metadata", None)
+        if isinstance(um, dict):
+            total += int(um.get("total_tokens")
+                         or (um.get("input_tokens", 0) + um.get("output_tokens", 0)) or 0)
+    return total
 
 
 def _analisar(messages) -> dict:
@@ -317,6 +329,39 @@ def _analisar(messages) -> dict:
     return {"routed": routed, "filas": filas}
 
 
+def _resolver_tenant(instancia: str | None) -> tuple[int, str]:
+    """Resolve (tenant_id, marca) a partir da instância Evolution.
+
+    Se a instância não estiver mapeada em `instances`, cai no tenant de fallback
+    (Paratec) — comportamento de transição enquanto nem todo número foi
+    registrado. Registrar todas as instâncias remove esse fallback."""
+    tid: int | None = None
+    if instancia:
+        try:
+            tid = store.get_tenant_by_instancia(instancia)
+        except Exception as e:  # pragma: no cover
+            log.warning("resolução de tenant p/ instância %s falhou: %s", instancia, e)
+    if tid is None:
+        try:
+            t = store.get_tenant_by_slug(settings.default_tenant_slug)
+            tid = int(t["id"]) if t else None
+            if instancia:
+                log.warning("instância %s sem tenant mapeado; usando fallback %s",
+                            instancia, settings.default_tenant_slug)
+        except Exception as e:  # pragma: no cover
+            log.warning("fallback de tenant falhou: %s", e)
+    if tid is None:
+        tid = 1  # último recurso: 1º tenant (Paratec)
+    marca = "AtentBot"
+    try:
+        t = store.get_tenant(tid)
+        if t and t.get("nome"):
+            marca = t["nome"]
+    except Exception:  # pragma: no cover
+        pass
+    return tid, marca
+
+
 def responder(
     mensagem: str,
     thread_id: str,
@@ -327,29 +372,46 @@ def responder(
     """Processa uma mensagem do cliente, PERSISTE o atendimento e devolve o texto.
 
     `thread_id` mantém o histórico (ex: número do WhatsApp). `instancia` é o
-    número/instância Evolution por onde a mensagem chegou — define QUAL agente
-    (persona + capacidades) responde. A persistência é best-effort: uma falha de
-    banco nunca impede a resposta ao cliente.
+    número/instância Evolution por onde a mensagem chegou — define o TENANT (mapa
+    instances) e QUAL agente (persona + capacidades) responde. A persistência é
+    best-effort: uma falha de banco nunca impede a resposta ao cliente.
     """
+    tenant_id, marca = _resolver_tenant(instancia)
+
+    # Assinatura inativa: o bot do tenant fica em silêncio (mesmo contrato do
+    # "IA pausada"). A mensagem não é processada; o n8n não envia nada.
+    try:
+        from . import billing
+
+        if not billing.assinatura_ativa(tenant_id):
+            log.info("tenant %s sem assinatura ativa; bot silenciado", tenant_id)
+            return ""
+    except Exception as e:  # pragma: no cover
+        log.warning("checagem de assinatura falhou (%s); prossegue", e)
+
+    # thread_id do grafo namespaced por tenant (isola memória entre tenants que
+    # compartilhem o mesmo número); o número puro vai separado em `telefone`.
+    graph_thread = f"{tenant_id}:{thread_id}"
+
     # Opt-out de promoções por palavra-chave (não aciona o agente/LLM).
     if mensagem.strip().lower() in OPT_OUT_PALAVRAS:
         try:
-            store.upsert_conversation(thread_id, cliente, telefone, instancia)
-            store.add_message(thread_id, "cliente", mensagem)
-            store.set_opt_out(thread_id, True)
+            store.upsert_conversation(tenant_id, thread_id, cliente, telefone, instancia)
+            store.add_message(tenant_id, thread_id, "cliente", mensagem)
+            store.set_opt_out(tenant_id, thread_id, True)
             resp = ("Pronto! Você não receberá mais nossas promoções por aqui. "
                     "Se precisar de atendimento, é só mandar uma mensagem. 👍")
-            store.add_message(thread_id, "agente", resp)
-            store.log_event("opt_out", thread_id=thread_id)
+            store.add_message(tenant_id, thread_id, "agente", resp)
+            store.log_event(tenant_id, "opt_out", thread_id=thread_id)
         except Exception as e:  # pragma: no cover
             log.warning("opt-out falhou: %s", e)
             resp = "Pronto! Você não receberá mais nossas promoções."
         return resp
 
     try:
-        store.upsert_conversation(thread_id, cliente, telefone, instancia)
-        store.add_message(thread_id, "cliente", mensagem)
-        store.log_event("mensagem_recebida", thread_id=thread_id)
+        store.upsert_conversation(tenant_id, thread_id, cliente, telefone, instancia)
+        store.add_message(tenant_id, thread_id, "cliente", mensagem)
+        store.log_event(tenant_id, "mensagem_recebida", thread_id=thread_id)
     except Exception as e:  # pragma: no cover
         log.warning("persistência (entrada) falhou: %s", e)
 
@@ -357,50 +419,65 @@ def responder(
     # resposta automática. A mensagem do cliente já foi persistida acima e
     # aparece no painel; devolve vazio para o n8n não enviar nada ao WhatsApp.
     try:
-        status_atual = store.get_status(thread_id)
+        status_atual = store.get_status(tenant_id, thread_id)
     except Exception as e:  # pragma: no cover
         log.warning("leitura de status falhou: %s", e)
         status_atual = None
     if status_atual in ("humano", "resolvida"):
         try:
-            store.log_event("ia_pausada", thread_id=thread_id)
+            store.log_event(tenant_id, "ia_pausada", thread_id=thread_id)
         except Exception:  # pragma: no cover
             pass
         return ""
 
-    result = _agent_para(instancia).invoke(
+    result = _agent_para(tenant_id, instancia).invoke(
         {"messages": [{"role": "user", "content": mensagem}]},
-        config={"configurable": {"thread_id": thread_id}},
+        config={"configurable": {
+            "thread_id": graph_thread,
+            "telefone": thread_id,
+            "tenant_id": tenant_id,
+        }},
     )
     resposta = _extrair_texto(result["messages"][-1].content)
+
+    # Consumo pay-per-use da CONVERSA (tokens do LLM). Registra + reporta ao
+    # Stripe (se metered ligado). Best-effort — nunca quebra a resposta.
+    try:
+        tks = _somar_tokens(result["messages"])
+        if tks:
+            from . import billing
+
+            billing.registrar_consumo(tenant_id, "chat", tks, {"thread_id": thread_id})
+    except Exception as e:  # pragma: no cover
+        log.warning("registro de consumo de conversa falhou: %s", e)
 
     try:
         info = _analisar(result["messages"])
         routed = info["routed"]
-        store.add_message(thread_id, "agente", resposta, especialista=routed)
-        store.log_event("resposta_enviada", thread_id=thread_id, especialista=routed)
+        store.add_message(tenant_id, thread_id, "agente", resposta, especialista=routed)
+        store.log_event(tenant_id, "resposta_enviada", thread_id=thread_id, especialista=routed)
         if routed:
-            store.log_event("roteou_especialista", thread_id=thread_id, especialista=routed)
+            store.log_event(tenant_id, "roteou_especialista", thread_id=thread_id, especialista=routed)
         for tipo, resumo in info["filas"]:
             store.add_queue_item(
-                tipo, resumo, thread_id=thread_id, cliente=cliente, telefone=telefone
+                tenant_id, tipo, resumo, thread_id=thread_id, cliente=cliente, telefone=telefone
             )
-            store.log_event("fila_criada", thread_id=thread_id, especialista=routed,
+            store.log_event(tenant_id, "fila_criada", thread_id=thread_id, especialista=routed,
                             meta={"tipo": tipo})
         if info["filas"]:
-            store.set_status(thread_id, "humano")
-            store.log_event("handoff_humano", thread_id=thread_id, especialista=routed)
+            store.set_status(tenant_id, thread_id, "humano")
+            store.log_event(tenant_id, "handoff_humano", thread_id=thread_id, especialista=routed)
         # Reflete o cadastro na conversa (nome exibido na tela adm).
-        cust = store.get_customer(thread_id)
+        cust = store.get_customer(tenant_id, thread_id)
         if cust and cust.get("razao_social"):
-            store.upsert_conversation(thread_id, cliente=cust["razao_social"])
+            store.upsert_conversation(tenant_id, thread_id, cliente=cust["razao_social"])
         # Alerta a equipe de vendas: novo orçamento aguardando atendimento humano
         # (só quando há pedido de orçamento na fila). Não bloqueia a resposta.
         pedidos = [resumo for tipo, resumo in info["filas"] if tipo == "pedido"]
         if pedidos:
             nome_cli = (cust or {}).get("razao_social") or cliente
-            _notificar_vendedores(nome_cli, telefone or thread_id, pedidos)
-            store.log_event("alerta_vendedor", thread_id=thread_id, especialista=routed)
+            _notificar_vendedores(tenant_id, marca, nome_cli, telefone or thread_id, pedidos)
+            store.log_event(tenant_id, "alerta_vendedor", thread_id=thread_id, especialista=routed)
     except Exception as e:  # pragma: no cover
         log.warning("persistência (saída) falhou: %s", e)
 

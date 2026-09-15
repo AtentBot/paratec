@@ -1,5 +1,11 @@
-"""API HTTP do serviço de agentes — chamada pelo N8N (fluxo do WhatsApp)
-e pela tela administrativa (endpoints /catalog, /conversas, /fila, /metrics)."""
+"""API HTTP do serviço de agentes (AtentBot).
+
+- `/chat` é chamado pelo N8N (fluxo do WhatsApp) — resolve o tenant pela instância.
+- `/auth/*` e `/billing/*` cuidam de login e assinatura (SaaS multi-tenant).
+- Os demais endpoints (painel) exigem sessão + assinatura ativa e são isolados
+  por tenant: cada handler recebe `tenant` (Depends) e repassa tenant.tenant_id
+  a store/catalog. Sem esse filtro, haveria vazamento entre clientes.
+"""
 import asyncio
 import base64
 import csv
@@ -12,14 +18,19 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request,
+    Response, UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import catalog, evolution, realtime, store
+from . import auth, billing, catalog, evolution, ingest, realtime, store
 from .agents import CAPACIDADES, CAPACIDADES_ORDEM, responder
+from .auth import TenantCtx, current_tenant
+from .billing import require_active_subscription
 from .db import get_pool
 from .settings import settings
 
@@ -30,13 +41,13 @@ async def lifespan(_: FastAPI):
     try:
         store.ensure_schema()
     except Exception as e:  # pragma: no cover
-        logging.getLogger("paratec").warning("ensure_schema falhou: %s", e)
+        logging.getLogger("atentbot").warning("ensure_schema falhou: %s", e)
     # Permite publicar eventos SSE a partir de código síncrono (threadpool).
     realtime.broker.bind_loop(asyncio.get_running_loop())
     yield
 
 
-app = FastAPI(title="Paratec Agent Service", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="AtentBot Agent Service", version="1.0.0", lifespan=lifespan)
 
 # Diretório dos banners/imagens de promoções (montado em /media). Persistir com
 # um volume Docker em `/app/media` para o histórico manter as miniaturas.
@@ -69,14 +80,15 @@ app.add_middleware(
 )
 
 
+# =========================================================================
+# Modelos
+# =========================================================================
+
 class ChatRequest(BaseModel):
     mensagem: str
-    # id da conversa (ex: número do WhatsApp) — mantém o histórico por cliente
     thread_id: str = "default"
     cliente: str | None = None
     telefone: str | None = None
-    # instância Evolution (número) por onde a mensagem chegou — define o agente
-    # que responde (persona + capacidades). Vazio = agente padrão.
     instancia: str | None = None
 
 
@@ -97,10 +109,7 @@ class BroadcastRequest(BaseModel):
     texto: str
     segmento: str = "todos"
     criado_por: str | None = None
-    # Banner opcional (caminho relativo /media/<arquivo> devolvido pelo upload).
     imagem: str | None = None
-    # Destinatários escolhidos manualmente na tela. Quando presente (não vazio),
-    # tem prioridade sobre `segmento`.
     telefones: list[str] | None = None
 
 
@@ -149,6 +158,35 @@ class AgenteUpdate(BaseModel):
     ativo: bool | None = None
 
 
+class SignupRequest(BaseModel):
+    empresa: str
+    email: str
+    senha: str
+    nome: str | None = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    senha: str
+
+
+class CheckoutRequest(BaseModel):
+    plano: str
+
+
+class CancelRequest(BaseModel):
+    respostas: dict | None = None   # as 5 respostas da pesquisa
+    comentario: str | None = None   # relato livre do cliente
+
+
+class InstanciaCreate(BaseModel):
+    nome: str
+
+
+# =========================================================================
+# Público: health + chat (n8n)
+# =========================================================================
+
 @app.get("/health")
 def health():
     try:
@@ -163,84 +201,179 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    # Tenant resolvido internamente pela instância (ver agents.responder).
     resposta = responder(
         req.mensagem, req.thread_id, req.cliente, req.telefone, req.instancia
     )
     return ChatResponse(resposta=resposta)
 
 
-# --- Conversas (tela adm) --------------------------------------------------
+# =========================================================================
+# Autenticação (sessão por cookie)
+# =========================================================================
+
+@app.post("/auth/signup")
+def auth_signup(req: SignupRequest, response: Response):
+    res = auth.signup(req.empresa, req.email, req.senha, req.nome)
+    auth.abrir_sessao(response, res["user"]["id"])
+    return {
+        "tenant": {"id": res["tenant"]["id"], "nome": res["tenant"]["nome"], "slug": res["tenant"]["slug"]},
+        "user": {"email": res["user"]["email"], "nome": res["user"].get("nome"), "role": res["user"]["role"]},
+    }
+
+
+@app.post("/auth/login")
+def auth_login(req: LoginRequest, response: Response):
+    u = auth.login(req.email, req.senha)
+    auth.abrir_sessao(response, u["id"])
+    return {"email": u["email"], "nome": u.get("nome"), "role": u["role"], "tenant_id": u["tenant_id"]}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, response: Response):
+    auth.encerrar_sessao(request, response)
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+def auth_me(tenant: TenantCtx = Depends(current_tenant)):
+    t = store.get_tenant(tenant.tenant_id)
+    return {
+        "email": tenant.email,
+        "nome": tenant.nome,
+        "name": tenant.nome or tenant.email,   # compat com o whoami antigo
+        "username": tenant.email,
+        "role": tenant.role,
+        "tenant": {"id": tenant.tenant_id, "nome": (t or {}).get("nome"), "slug": (t or {}).get("slug")},
+        "assinatura": billing.status(tenant.tenant_id),
+    }
+
+
+# =========================================================================
+# Billing (Stripe)
+# =========================================================================
+
+@app.get("/billing/plans")
+def billing_plans():
+    return billing.planos()
+
+
+@app.get("/billing/status")
+def billing_status(tenant: TenantCtx = Depends(current_tenant)):
+    return billing.status(tenant.tenant_id)
+
+
+@app.get("/billing/usage")
+def billing_usage(tenant: TenantCtx = Depends(current_tenant)):
+    """Consumo pay-per-use do mês (indexação + conversas)."""
+    return billing.uso(tenant.tenant_id)
+
+
+@app.post("/billing/checkout")
+def billing_checkout(req: CheckoutRequest, tenant: TenantCtx = Depends(current_tenant)):
+    if tenant.role != "owner":
+        raise HTTPException(403, "apenas o responsável da conta pode assinar")
+    return {"url": billing.criar_checkout(tenant, req.plano)}
+
+
+@app.post("/billing/cancel")
+def billing_cancel(req: CancelRequest | None = None,
+                   tenant: TenantCtx = Depends(current_tenant)):
+    if tenant.role != "owner":
+        raise HTTPException(403, "apenas o responsável da conta pode cancelar")
+    respostas = req.respostas if req else None
+    comentario = req.comentario if req else None
+    return billing.cancelar(tenant.tenant_id, respostas, comentario)
+
+
+@app.post("/billing/reactivate")
+def billing_reactivate(tenant: TenantCtx = Depends(current_tenant)):
+    if tenant.role != "owner":
+        raise HTTPException(403, "apenas o responsável da conta pode reativar")
+    return billing.reativar(tenant.tenant_id)
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request):
+    # Corpo CRU é obrigatório p/ verificar a assinatura do Stripe.
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature")
+    return billing.processar_webhook(payload, sig)
+
+
+# =========================================================================
+# Conversas (painel) — isoladas por tenant
+# =========================================================================
 
 @app.get("/conversas")
 def conversas(
     status: str | None = None,
     q: str | None = None,
     limit: int = Query(100, ge=1, le=500),
+    tenant: TenantCtx = Depends(require_active_subscription),
 ):
-    return store.list_conversations(status, q, limit)
+    return store.list_conversations(tenant.tenant_id, status, q, limit)
 
 
 @app.get("/conversas/{thread_id}")
-def conversa(thread_id: str):
-    c = store.get_conversation(thread_id)
+def conversa(thread_id: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    c = store.get_conversation(tenant.tenant_id, thread_id)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
 
 
 @app.post("/conversas/{thread_id}/assumir")
-def assumir(thread_id: str):
-    c = store.assumir_conversation(thread_id)
+def assumir(thread_id: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    c = store.assumir_conversation(tenant.tenant_id, thread_id)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
 
 
 @app.post("/conversas/{thread_id}/resolver")
-def resolver(thread_id: str):
-    c = store.resolver_conversation(thread_id)
+def resolver(thread_id: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    c = store.resolver_conversation(tenant.tenant_id, thread_id)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
 
 
 @app.post("/conversas/{thread_id}/reabrir")
-def reabrir(thread_id: str):
-    c = store.reabrir_conversation(thread_id)
+def reabrir(thread_id: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    c = store.reabrir_conversation(tenant.tenant_id, thread_id)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
 
 
 @app.post("/conversas/{thread_id}/bot")
-def bot(thread_id: str, req: BotRequest):
-    """Liga/desliga a resposta automática da IA nesta conversa (toggle do painel).
-    ativo=false pausa a IA (atendimento humano); ativo=true devolve à IA."""
-    c = store.set_bot(thread_id, req.ativo)
+def bot(thread_id: str, req: BotRequest, tenant: TenantCtx = Depends(require_active_subscription)):
+    """Liga/desliga a resposta automática da IA nesta conversa (toggle do painel)."""
+    c = store.set_bot(tenant.tenant_id, thread_id, req.ativo)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
 
 
 @app.post("/conversas/{thread_id}/ler")
-def marcar_lida(thread_id: str):
+def marcar_lida(thread_id: str, tenant: TenantCtx = Depends(require_active_subscription)):
     """Zera o contador de não-lidas (quando o atendente abre a conversa)."""
-    c = store.marcar_lida(thread_id)
+    c = store.marcar_lida(tenant.tenant_id, thread_id)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
 
 
 @app.get("/conversas/{thread_id}/stream")
-async def stream(thread_id: str, request: Request):
-    """Push em tempo real (SSE): emite um evento sempre que uma mensagem é
-    gravada nesta conversa. O navegador, ao receber, revalida a conversa/lista.
-    Envia keep-alives periódicos e encerra quando o cliente desconecta."""
+async def stream(thread_id: str, request: Request,
+                 tenant: TenantCtx = Depends(require_active_subscription)):
+    """Push em tempo real (SSE) por conversa. Canal namespaced por tenant."""
+    canal = f"{tenant.tenant_id}:{thread_id}"
 
     async def gen():
-        q = await realtime.broker.subscribe(thread_id)
+        q = await realtime.broker.subscribe(canal)
         try:
-            # abre o stream imediatamente (evita buffering do proxy no 1º byte)
             yield ": ok\n\n"
             while True:
                 if await request.is_disconnected():
@@ -249,9 +382,9 @@ async def stream(thread_id: str, request: Request):
                     data = await asyncio.wait_for(q.get(), timeout=20)
                     yield f"data: {json.dumps(data)}\n\n"
                 except asyncio.TimeoutError:
-                    yield ": keep-alive\n\n"  # comentário SSE mantém a conexão viva
+                    yield ": keep-alive\n\n"
         finally:
-            realtime.broker.unsubscribe(thread_id, q)
+            realtime.broker.unsubscribe(canal, q)
 
     return StreamingResponse(
         gen(),
@@ -259,117 +392,121 @@ async def stream(thread_id: str, request: Request):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # desliga buffering em proxies (nginx)
+            "X-Accel-Buffering": "no",
         },
     )
 
 
 @app.post("/conversas/{thread_id}/nota")
-def add_nota(thread_id: str, req: NotaRequest):
-    if store.get_conversation(thread_id) is None:
+def add_nota(thread_id: str, req: NotaRequest,
+             tenant: TenantCtx = Depends(require_active_subscription)):
+    if store.get_conversation(tenant.tenant_id, thread_id) is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     texto = req.texto.strip()
     if not texto:
         raise HTTPException(status_code=422, detail="texto vazio")
-    store.add_note(thread_id, texto, req.autor)
-    return store.get_conversation(thread_id)
+    store.add_note(tenant.tenant_id, thread_id, texto, req.autor)
+    return store.get_conversation(tenant.tenant_id, thread_id)
 
 
 @app.post("/conversas/{thread_id}/atribuir")
-def atribuir(thread_id: str, req: AtribuirRequest):
-    c = store.set_responsavel(thread_id, req.responsavel)
+def atribuir(thread_id: str, req: AtribuirRequest,
+             tenant: TenantCtx = Depends(require_active_subscription)):
+    c = store.set_responsavel(tenant.tenant_id, thread_id, req.responsavel)
     if c is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     return c
 
 
 @app.post("/conversas/{thread_id}/responder")
-def responder_conversa(thread_id: str, req: ResponderRequest):
-    """Envia uma resposta HUMANA ao cliente pelo WhatsApp (Evolution) e registra
-    no histórico. thread_id = número do WhatsApp."""
+def responder_conversa(thread_id: str, req: ResponderRequest,
+                       tenant: TenantCtx = Depends(require_active_subscription)):
+    """Envia uma resposta HUMANA ao cliente pelo WhatsApp (Evolution) e registra."""
     texto = req.texto.strip()
     if not texto:
         raise HTTPException(status_code=422, detail="texto vazio")
-    conv = store.get_conversation(thread_id)
+    conv = store.get_conversation(tenant.tenant_id, thread_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="conversa não encontrada")
     try:
-        # Responde pela MESMA instância (número) que recebeu a conversa.
         evolution.enviar_texto(thread_id, texto, instancia=conv.get("instancia"))
     except evolution.EvolutionError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    store.add_message(thread_id, "humano", texto)
-    store.set_status(thread_id, "humano")
-    return store.get_conversation(thread_id)
+    store.add_message(tenant.tenant_id, thread_id, "humano", texto)
+    store.set_status(tenant.tenant_id, thread_id, "humano")
+    return store.get_conversation(tenant.tenant_id, thread_id)
 
 
-# --- Clientes (tela adm) ---------------------------------------------------
+# =========================================================================
+# Clientes (painel)
+# =========================================================================
 
 @app.get("/clientes")
-def clientes(status: str | None = None, limit: int = Query(200, ge=1, le=1000)):
-    return store.list_customers(status, limit)
+def clientes(status: str | None = None, limit: int = Query(200, ge=1, le=1000),
+             tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.list_customers(tenant.tenant_id, status, limit)
 
 
 @app.get("/clientes/{telefone}")
-def cliente(telefone: str):
-    c = store.get_customer(telefone)
+def cliente(telefone: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    c = store.get_customer(tenant.tenant_id, telefone)
     if c is None:
         raise HTTPException(status_code=404, detail="cliente não encontrado")
     return c
 
 
-# --- Equipe de vendas (tela adm) -------------------------------------------
+# =========================================================================
+# Equipe de vendas (painel)
+# =========================================================================
 
 @app.get("/vendedores")
-def vendedores(ativo: bool | None = None):
-    return store.list_sellers(only_ativo=bool(ativo))
+def vendedores(ativo: bool | None = None,
+               tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.list_sellers(tenant.tenant_id, only_ativo=bool(ativo))
 
 
 @app.post("/vendedores")
-def vendedor_criar(req: VendedorCreate):
+def vendedor_criar(req: VendedorCreate,
+                   tenant: TenantCtx = Depends(require_active_subscription)):
     nome = req.nome.strip()
     telefone = "".join(ch for ch in req.telefone if ch.isdigit())
     if not nome:
         raise HTTPException(status_code=422, detail="informe o nome do vendedor")
     if len(telefone) < 10:
         raise HTTPException(status_code=422, detail="WhatsApp inválido (use DDD + número)")
-    return store.create_seller(nome, telefone, req.email, req.ativo)
+    return store.create_seller(tenant.tenant_id, nome, telefone, req.email, req.ativo)
 
 
 @app.patch("/vendedores/{seller_id}")
-def vendedor_atualizar(seller_id: int, req: VendedorUpdate):
+def vendedor_atualizar(seller_id: int, req: VendedorUpdate,
+                       tenant: TenantCtx = Depends(require_active_subscription)):
     telefone = req.telefone
     if telefone is not None:
         telefone = "".join(ch for ch in telefone if ch.isdigit())
         if len(telefone) < 10:
             raise HTTPException(status_code=422, detail="WhatsApp inválido (use DDD + número)")
-    v = store.update_seller(seller_id, req.nome, telefone, req.email, req.ativo)
+    v = store.update_seller(tenant.tenant_id, seller_id, req.nome, telefone, req.email, req.ativo)
     if v is None:
         raise HTTPException(status_code=404, detail="vendedor não encontrado")
     return v
 
 
 @app.delete("/vendedores/{seller_id}")
-def vendedor_remover(seller_id: int):
-    if not store.delete_seller(seller_id):
+def vendedor_remover(seller_id: int,
+                     tenant: TenantCtx = Depends(require_active_subscription)):
+    if not store.delete_seller(tenant.tenant_id, seller_id):
         raise HTTPException(status_code=404, detail="vendedor não encontrado")
     return {"removido": seller_id}
 
 
-# --- WhatsApp: conexões (tela de Configurações) ----------------------------
-# O agent-service faz de PROXY da Evolution API: o painel gerencia instâncias e
-# lê o QR Code sem nunca receber a URL/chave da Evolution. Requer Evolution
-# configurada (EVOLUTION_API_URL/KEY) — caso contrário devolve 503.
+# =========================================================================
+# WhatsApp: conexões (proxy da Evolution) — registra o mapa instância->tenant
+# =========================================================================
 
 _INSTANCIA_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,39}$")
 
 
-class InstanciaCreate(BaseModel):
-    nome: str
-
-
 def _normalizar_instancia(nome: str) -> str:
-    """Sanitiza o nome da instância (minúsculas, sem espaços/acentos)."""
     slug = re.sub(r"[^a-z0-9_-]", "-", (nome or "").strip().lower()).strip("-")
     slug = re.sub(r"-{2,}", "-", slug)
     if not _INSTANCIA_RE.match(slug):
@@ -394,8 +531,7 @@ def _evolution_call(fn, *args):
 
 
 @app.get("/whatsapp/config")
-def whatsapp_config():
-    """Diz ao painel se a integração está ligada e se o webhook é automático."""
+def whatsapp_config(tenant: TenantCtx = Depends(require_active_subscription)):
     return {
         "configurado": settings.evolution_configured,
         "webhook_automatico": bool(settings.evolution_webhook_url),
@@ -404,102 +540,125 @@ def whatsapp_config():
 
 
 @app.get("/whatsapp/instancias")
-def whatsapp_instancias():
+def whatsapp_instancias(tenant: TenantCtx = Depends(require_active_subscription)):
     return _evolution_call(evolution.listar_instancias)
 
 
 @app.post("/whatsapp/instancias")
-def whatsapp_criar(req: InstanciaCreate):
-    """Cria uma instância e devolve o QR Code inicial para o admin escanear."""
+def whatsapp_criar(req: InstanciaCreate,
+                   tenant: TenantCtx = Depends(require_active_subscription)):
+    """Cria uma instância, mapeia ao tenant e devolve o QR Code inicial."""
     nome = _normalizar_instancia(req.nome)
+    outro = store.get_tenant_by_instancia(nome)
+    if outro is not None and outro != tenant.tenant_id:
+        raise HTTPException(status_code=409, detail="este número já pertence a outra conta")
     qr = _evolution_call(evolution.criar_instancia, nome)
+    store.register_instance(tenant.tenant_id, nome)
     return {"nome": nome, "qrcode": qr}
 
 
 @app.get("/whatsapp/instancias/{nome}/qrcode")
-def whatsapp_qrcode(nome: str):
-    """(Re)gera o QR Code de uma instância existente (renovação do código)."""
+def whatsapp_qrcode(nome: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    _guard_instancia_do_tenant(tenant.tenant_id, nome)
     return {"nome": nome, "qrcode": _evolution_call(evolution.conectar_instancia, nome)}
 
 
 @app.get("/whatsapp/instancias/{nome}/status")
-def whatsapp_status(nome: str):
+def whatsapp_status(nome: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    _guard_instancia_do_tenant(tenant.tenant_id, nome)
     return _evolution_call(evolution.status_instancia, nome)
 
 
 @app.post("/whatsapp/instancias/{nome}/desconectar")
-def whatsapp_desconectar(nome: str):
+def whatsapp_desconectar(nome: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    _guard_instancia_do_tenant(tenant.tenant_id, nome)
     _evolution_call(evolution.desconectar_instancia, nome)
     return {"nome": nome, "estado": "desconectado"}
 
 
 @app.delete("/whatsapp/instancias/{nome}")
-def whatsapp_remover(nome: str):
+def whatsapp_remover(nome: str, tenant: TenantCtx = Depends(require_active_subscription)):
+    _guard_instancia_do_tenant(tenant.tenant_id, nome)
     _evolution_call(evolution.remover_instancia, nome)
+    store.unregister_instance(tenant.tenant_id, nome)
     return {"removido": nome}
 
 
-# --- Agentes (multi-agente por número de WhatsApp) -------------------------
-# Cada agente = persona + capacidades, amarrado a uma instância (número). Ao
-# chegar mensagem por aquele número, é este agente que responde (ver agents.py).
+def _guard_instancia_do_tenant(tenant_id: int, nome: str) -> None:
+    """Impede um tenant de operar a instância de outro."""
+    dono = store.get_tenant_by_instancia(nome)
+    if dono is not None and dono != tenant_id:
+        raise HTTPException(status_code=404, detail="instância não encontrada")
+
+
+# =========================================================================
+# Agentes (multi-agente por número) — por tenant
+# =========================================================================
 
 def _validar_capacidades(caps: list[str]) -> list[str]:
     invalidas = [c for c in caps if c not in CAPACIDADES]
     if invalidas:
         raise HTTPException(status_code=422, detail=f"capacidade(s) inválida(s): {invalidas}")
-    # Mantém a ordem canônica e remove duplicatas.
     return [c for c in CAPACIDADES_ORDEM if c in set(caps)]
 
 
 @app.get("/agentes/capacidades")
-def agentes_capacidades():
-    """Catálogo de capacidades para a tela de Agentes (chave + rótulo)."""
+def agentes_capacidades(tenant: TenantCtx = Depends(require_active_subscription)):
     return [{"chave": c, "label": CAPACIDADES[c]["label"]} for c in CAPACIDADES_ORDEM]
 
 
 @app.get("/agentes")
-def agentes():
-    return store.list_agents()
+def agentes(tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.list_agents(tenant.tenant_id)
 
 
 @app.post("/agentes")
-def agente_criar(req: AgenteCreate):
+def agente_criar(req: AgenteCreate,
+                 tenant: TenantCtx = Depends(require_active_subscription)):
     nome = (req.nome or "").strip()
     if not nome:
         raise HTTPException(status_code=422, detail="informe o nome do agente")
     caps = _validar_capacidades(req.capacidades)
     inst = (req.instancia or "").strip() or None
-    if inst and store.get_agent_by_instancia(inst):
-        raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
+    if inst:
+        dono = store.get_tenant_by_instancia(inst)
+        if dono is not None and dono != tenant.tenant_id:
+            raise HTTPException(status_code=409, detail="este número pertence a outra conta")
+        if store.get_agent_by_instancia(inst):
+            raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
     try:
-        return store.create_agent(nome, req.descricao, inst, req.persona, caps, req.ativo)
+        agente = store.create_agent(tenant.tenant_id, nome, req.descricao, inst, req.persona, caps, req.ativo)
     except Exception as e:
-        # Índice único parcial: número já amarrado (corrida) -> conflito amigável.
         if "idx_agents_instancia" in str(e):
             raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
         raise
+    if inst:
+        store.register_instance(tenant.tenant_id, inst)
+    return agente
 
 
 @app.patch("/agentes/{agent_id}")
-def agente_atualizar(agent_id: int, req: AgenteUpdate):
-    atual = store.get_agent(agent_id)
+def agente_atualizar(agent_id: int, req: AgenteUpdate,
+                     tenant: TenantCtx = Depends(require_active_subscription)):
+    atual = store.get_agent(tenant.tenant_id, agent_id)
     if atual is None:
         raise HTTPException(status_code=404, detail="agente não encontrado")
     caps = _validar_capacidades(req.capacidades) if req.capacidades is not None else None
-    # "instancia": "" (string vazia) = desamarrar o número; ausente = manter.
     limpar = req.instancia is not None and (req.instancia or "").strip() == ""
     inst = (req.instancia or "").strip() or None
-    # O agente PADRÃO é o catch-all: nunca fica amarrado a um número específico.
     if atual.get("is_default"):
         inst = None
         limpar = False
     if inst:
+        dono = store.get_tenant_by_instancia(inst)
+        if dono is not None and dono != tenant.tenant_id:
+            raise HTTPException(status_code=409, detail="este número pertence a outra conta")
         outro = store.get_agent_by_instancia(inst)
         if outro and outro["id"] != agent_id:
             raise HTTPException(status_code=409, detail="este número já está atribuído a outro agente")
     try:
         v = store.update_agent(
-            agent_id,
+            tenant.tenant_id, agent_id,
             nome=(req.nome.strip() if req.nome else None),
             descricao=req.descricao,
             instancia=inst,
@@ -514,50 +673,60 @@ def agente_atualizar(agent_id: int, req: AgenteUpdate):
         raise
     if v is None:
         raise HTTPException(status_code=404, detail="agente não encontrado")
+    if inst:
+        store.register_instance(tenant.tenant_id, inst)
     return v
 
 
 @app.delete("/agentes/{agent_id}")
-def agente_remover(agent_id: int):
-    atual = store.get_agent(agent_id)
+def agente_remover(agent_id: int,
+                   tenant: TenantCtx = Depends(require_active_subscription)):
+    atual = store.get_agent(tenant.tenant_id, agent_id)
     if atual is None:
         raise HTTPException(status_code=404, detail="agente não encontrado")
     if atual.get("is_default"):
         raise HTTPException(status_code=400, detail="o agente padrão não pode ser removido")
-    if not store.delete_agent(agent_id):
+    if not store.delete_agent(tenant.tenant_id, agent_id):
         raise HTTPException(status_code=404, detail="agente não encontrado")
     return {"removido": agent_id}
 
 
-# --- Fila humana (tela adm) ------------------------------------------------
+# =========================================================================
+# Fila humana (painel)
+# =========================================================================
 
 @app.get("/fila")
-def fila(tipo: str | None = None, status: str | None = None):
-    return store.list_queue(tipo, status)
+def fila(tipo: str | None = None, status: str | None = None,
+         tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.list_queue(tenant.tenant_id, tipo, status)
 
 
 @app.patch("/fila/{item_id}")
-def fila_update(item_id: int, upd: QueueUpdate):
-    item = store.update_queue_item(item_id, upd.status, upd.responsavel)
+def fila_update(item_id: int, upd: QueueUpdate,
+                tenant: TenantCtx = Depends(require_active_subscription)):
+    item = store.update_queue_item(tenant.tenant_id, item_id, upd.status, upd.responsavel)
     if item is None:
         raise HTTPException(status_code=404, detail="item não encontrado")
     return item
 
 
-# --- Métricas (dashboard) --------------------------------------------------
+# =========================================================================
+# Métricas (dashboard)
+# =========================================================================
 
 @app.get("/metrics/overview")
-def metrics_overview():
-    return store.metrics_overview()
+def metrics_overview(tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.metrics_overview(tenant.tenant_id)
 
 
 @app.get("/metrics/unread")
-def metrics_unread():
-    """Total de não-lidas (badge global do menu Atendimento)."""
-    return {"total": store.unread_total()}
+def metrics_unread(tenant: TenantCtx = Depends(require_active_subscription)):
+    return {"total": store.unread_total(tenant.tenant_id)}
 
 
-# --- Exportações CSV -------------------------------------------------------
+# =========================================================================
+# Exportações CSV
+# =========================================================================
 
 def _csv(filename: str, colunas: list[str], linhas: list[dict]) -> Response:
     buf = io.StringIO()
@@ -573,57 +742,62 @@ def _csv(filename: str, colunas: list[str], linhas: list[dict]) -> Response:
 
 
 @app.get("/clientes.csv")
-def clientes_csv(status: str | None = None):
-    cols = ["telefone", "razao_social", "cnpj", "email", "nome_contato",
-            "status", "created_at"]
-    return _csv("clientes.csv", cols, store.list_customers(status, 100000))
+def clientes_csv(status: str | None = None,
+                 tenant: TenantCtx = Depends(require_active_subscription)):
+    cols = ["telefone", "razao_social", "cnpj", "email", "nome_contato", "status", "created_at"]
+    return _csv("clientes.csv", cols, store.list_customers(tenant.tenant_id, status, 100000))
 
 
 @app.get("/fila.csv")
-def fila_csv(tipo: str | None = None, status: str | None = None):
-    cols = ["id", "tipo", "status", "cliente", "telefone", "resumo",
-            "responsavel", "created_at"]
-    return _csv("fila.csv", cols, store.list_queue(tipo, status))
+def fila_csv(tipo: str | None = None, status: str | None = None,
+             tenant: TenantCtx = Depends(require_active_subscription)):
+    cols = ["id", "tipo", "status", "cliente", "telefone", "resumo", "responsavel", "created_at"]
+    return _csv("fila.csv", cols, store.list_queue(tenant.tenant_id, tipo, status))
 
 
-# --- Relatórios (por período) ----------------------------------------------
+# =========================================================================
+# Relatórios
+# =========================================================================
 
 @app.get("/relatorios/resumo")
-def relatorios_resumo(desde: str, ate: str):
-    return store.relatorio_resumo(desde, ate)
+def relatorios_resumo(desde: str, ate: str,
+                      tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.relatorio_resumo(tenant.tenant_id, desde, ate)
 
 
 @app.get("/relatorios/conversas.csv")
-def relatorios_conversas_csv(desde: str, ate: str):
+def relatorios_conversas_csv(desde: str, ate: str,
+                             tenant: TenantCtx = Depends(require_active_subscription)):
     cols = ["thread_id", "cliente", "telefone", "status", "especialista",
             "responsavel", "created_at", "updated_at"]
     return _csv(f"relatorio-conversas-{desde}_a_{ate}.csv", cols,
-                store.relatorio_conversas(desde, ate))
+                store.relatorio_conversas(tenant.tenant_id, desde, ate))
 
 
-# --- RAG / base de conhecimento --------------------------------------------
+# =========================================================================
+# RAG / base de conhecimento
+# =========================================================================
 
 @app.get("/rag/status")
-def rag_status():
+def rag_status(tenant: TenantCtx = Depends(require_active_subscription)):
     from . import rag
-    return rag.status()
+    return rag.status(tenant.tenant_id)
 
 
 @app.post("/rag/ingest")
-def rag_ingest():
-    """(Re)constrói a base de conhecimento a partir do catálogo."""
+def rag_ingest(tenant: TenantCtx = Depends(require_active_subscription)):
     from . import rag
     if not settings.rag_enabled:
         raise HTTPException(status_code=503, detail="RAG não configurado (VECTOR_HOST)")
     try:
-        return rag.ingest_catalogo()
+        return rag.ingest_catalogo(tenant.tenant_id)
     except Exception as e:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"falha no ingest: {e}")
 
 
 @app.post("/rag/upload")
-async def rag_upload(file: UploadFile = File(...)):
-    """Ingere um documento (PDF/txt/md) na base de conhecimento."""
+async def rag_upload(file: UploadFile = File(...),
+                     tenant: TenantCtx = Depends(require_active_subscription)):
     from . import rag
     if not settings.rag_enabled:
         raise HTTPException(status_code=503, detail="RAG não configurado (VECTOR_HOST)")
@@ -631,43 +805,45 @@ async def rag_upload(file: UploadFile = File(...)):
     if not data:
         raise HTTPException(status_code=422, detail="arquivo vazio")
     try:
-        return rag.ingest_documento(file.filename or "documento", data, file.content_type)
+        return rag.ingest_documento(tenant.tenant_id, file.filename or "documento",
+                                    data, file.content_type)
     except Exception as e:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"falha no upload: {e}")
 
 
 @app.get("/rag/fontes")
-def rag_fontes():
+def rag_fontes(tenant: TenantCtx = Depends(require_active_subscription)):
     from . import rag
     if not settings.rag_enabled:
         return []
-    return rag.listar_fontes()
+    return rag.listar_fontes(tenant.tenant_id)
 
 
 @app.delete("/rag/fontes/{source}")
-def rag_remover_fonte(source: str):
+def rag_remover_fonte(source: str,
+                      tenant: TenantCtx = Depends(require_active_subscription)):
     from . import rag
-    removidos = rag.remover_fonte(source)
+    removidos = rag.remover_fonte(tenant.tenant_id, source)
     return {"fonte": source, "removidos": removidos}
 
 
-# --- Orçamentos (comercial) — pedidos de orçamento gerados pelo agente ------
+# =========================================================================
+# Orçamentos (comercial)
+# =========================================================================
 
 @app.get("/orcamentos")
-def orcamentos(status: str | None = None):
-    return store.list_queue("pedido", status)
+def orcamentos(status: str | None = None,
+               tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.list_queue(tenant.tenant_id, "pedido", status)
 
 
-# --- Broadcast (envio em massa de promoções) --------------------------------
+# =========================================================================
+# Broadcast (envio em massa)
+# =========================================================================
 
 def _run_broadcast(
-    bid: int, texto: str, dests: list[dict], midia: dict | None = None
+    tenant_id: int, bid: int, texto: str, dests: list[dict], midia: dict | None = None
 ) -> None:
-    """Worker: envia a todos com throttle (anti-bloqueio). Roda em background.
-
-    `midia` (opcional) = {"b64", "mimetype", "filename"} para enviar um banner
-    (imagem) com `texto` como legenda; sem ela, envia só texto.
-    """
     for c in dests:
         try:
             if midia:
@@ -677,18 +853,18 @@ def _run_broadcast(
                 )
             else:
                 evolution.enviar_texto(c["telefone"], texto)
-            store.bump_broadcast(bid, enviados=1)
+            store.bump_broadcast(tenant_id, bid, enviados=1)
         except Exception as e:  # pragma: no cover
-            logging.getLogger("paratec").warning("broadcast %s falhou p/ %s: %s",
-                                                  bid, c.get("telefone"), e)
-            store.bump_broadcast(bid, falhas=1)
+            logging.getLogger("atentbot").warning("broadcast %s falhou p/ %s: %s",
+                                                   bid, c.get("telefone"), e)
+            store.bump_broadcast(tenant_id, bid, falhas=1)
         time.sleep(settings.broadcast_throttle_seconds)
-    store.finish_broadcast(bid, "concluido")
+    store.finish_broadcast(tenant_id, bid, "concluido")
 
 
 @app.post("/broadcast/upload")
-async def broadcast_upload(file: UploadFile = File(...)):
-    """Recebe a imagem do banner e a guarda em /media. Devolve o caminho relativo."""
+async def broadcast_upload(file: UploadFile = File(...),
+                           tenant: TenantCtx = Depends(require_active_subscription)):
     mime = (file.content_type or "").lower()
     if mime not in _IMAGE_MIMES:
         raise HTTPException(status_code=422, detail="use uma imagem JPG, PNG ou WEBP")
@@ -703,32 +879,30 @@ async def broadcast_upload(file: UploadFile = File(...)):
 
 
 @app.post("/broadcast")
-def broadcast(req: BroadcastRequest, bg: BackgroundTasks):
+def broadcast(req: BroadcastRequest, bg: BackgroundTasks,
+              tenant: TenantCtx = Depends(require_active_subscription)):
     texto = req.texto.strip()
     if not texto and not req.imagem:
         raise HTTPException(status_code=422, detail="informe um texto ou uma imagem")
     if not settings.evolution_configured:
         raise HTTPException(status_code=503, detail="Evolution API não configurada")
 
-    # Destinatários: seleção manual tem prioridade sobre o segmento.
     if req.telefones:
-        dests = store.customers_por_telefones(req.telefones)
+        dests = store.customers_por_telefones(tenant.tenant_id, req.telefones)
         if not dests:
             raise HTTPException(status_code=422, detail="nenhum cliente elegível selecionado")
     else:
-        dests = store.customers_para_broadcast(req.segmento)
+        dests = store.customers_para_broadcast(tenant.tenant_id, req.segmento)
         if not dests:
             raise HTTPException(status_code=422, detail="nenhum cliente elegível neste segmento")
 
-    # Banner opcional: carrega o arquivo salvo no upload e prepara para envio.
     midia: dict | None = None
     imagem_ref: str | None = None
     if req.imagem:
-        arquivo = req.imagem.rsplit("/", 1)[-1]  # aceita "/media/x" ou só "x"
+        arquivo = req.imagem.rsplit("/", 1)[-1]
         caminho = _media_file(arquivo)
         if not caminho.exists():
             raise HTTPException(status_code=422, detail="imagem não encontrada; reenvie o banner")
-        # extensão -> mimetype (inverso de _IMAGE_MIMES)
         mimetype = next((m for m, ext in _IMAGE_MIMES.items() if ext == caminho.suffix), "image/jpeg")
         midia = {
             "b64": base64.b64encode(caminho.read_bytes()).decode("ascii"),
@@ -737,33 +911,33 @@ def broadcast(req: BroadcastRequest, bg: BackgroundTasks):
         }
         imagem_ref = f"/media/{arquivo}"
 
-    bid = store.create_broadcast(texto, len(dests), req.criado_por, imagem_ref)
-    bg.add_task(_run_broadcast, bid, texto, dests, midia)
+    bid = store.create_broadcast(tenant.tenant_id, texto, len(dests), req.criado_por, imagem_ref)
+    bg.add_task(_run_broadcast, tenant.tenant_id, bid, texto, dests, midia)
     return {"id": bid, "total": len(dests), "status": "enviando"}
 
 
 @app.get("/broadcasts")
-def broadcasts():
-    return store.list_broadcasts()
+def broadcasts(tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.list_broadcasts(tenant.tenant_id)
 
 
 @app.get("/broadcast/segmentos")
-def broadcast_segmentos():
-    """Quantidade de clientes elegíveis por segmento."""
-    return store.contar_segmentos()
+def broadcast_segmentos(tenant: TenantCtx = Depends(require_active_subscription)):
+    return store.contar_segmentos(tenant.tenant_id)
 
 
-# --- Catálogo (consumido pela tela administrativa) -------------------------
+# =========================================================================
+# Catálogo (painel)
+# =========================================================================
 
 @app.get("/catalog/stats")
-def catalog_stats():
-    """Totais do catálogo para os cards do dashboard."""
-    return catalog.contar_totais()
+def catalog_stats(tenant: TenantCtx = Depends(require_active_subscription)):
+    return catalog.contar_totais(tenant.tenant_id)
 
 
 @app.get("/catalog/categorias")
-def catalog_categorias():
-    return catalog.listar_categorias()
+def catalog_categorias(tenant: TenantCtx = Depends(require_active_subscription)):
+    return catalog.listar_categorias(tenant.tenant_id)
 
 
 @app.get("/catalog/produtos")
@@ -772,13 +946,52 @@ def catalog_produtos(
     categoria: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    tenant: TenantCtx = Depends(require_active_subscription),
 ):
-    return catalog.listar_produtos(q, categoria, limit, offset)
+    return catalog.listar_produtos(tenant.tenant_id, q, categoria, limit, offset)
 
 
 @app.get("/catalog/produtos/{identificador}")
-def catalog_produto(identificador: str):
-    p = catalog.detalhes_produto(identificador)
+def catalog_produto(identificador: str,
+                    tenant: TenantCtx = Depends(require_active_subscription)):
+    p = catalog.detalhes_produto(tenant.tenant_id, identificador)
     if p is None:
         raise HTTPException(status_code=404, detail="produto não encontrado")
     return p
+
+
+# --- Importação self-serve do catálogo (CSV) -------------------------------
+
+@app.get("/catalog/modelo.csv")
+def catalog_modelo(tenant: TenantCtx = Depends(current_tenant)):
+    """Baixa o CSV de exemplo (template) para o cliente preencher."""
+    return Response(
+        content=ingest.modelo_csv(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="modelo-catalogo.csv"'},
+    )
+
+
+@app.post("/catalog/import")
+async def catalog_import(file: UploadFile = File(...),
+                         tenant: TenantCtx = Depends(require_active_subscription)):
+    """Importa/atualiza o catálogo do tenant a partir de um CSV."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="arquivo vazio")
+    try:
+        produtos = ingest.parse_csv(data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    try:
+        return ingest.importar(tenant.tenant_id, produtos)
+    except Exception as e:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=f"falha ao importar: {e}")
+
+
+@app.delete("/catalog")
+def catalog_limpar(tenant: TenantCtx = Depends(require_active_subscription)):
+    """Apaga TODO o catálogo do tenant (produtos, variantes e categorias)."""
+    if tenant.role != "owner":
+        raise HTTPException(403, "apenas o responsável da conta pode limpar o catálogo")
+    return ingest.limpar(tenant.tenant_id)
