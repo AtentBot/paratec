@@ -18,6 +18,7 @@ import {
   BellOff,
   Settings,
   CreditCard,
+  LifeBuoy,
   LogOut,
   Zap,
 } from "lucide-react";
@@ -50,6 +51,7 @@ const SISTEMA: NavItem[] = [
   { href: "/agentes", label: "Agentes", icon: Bot },
   { href: "/configuracoes", label: "Configurações", icon: Settings },
   { href: "/assinatura", label: "Assinatura", icon: CreditCard },
+  { href: "/suporte", label: "Suporte", icon: LifeBuoy },
 ];
 
 function NavLink({ item, path }: { item: NavItem; path: string }) {

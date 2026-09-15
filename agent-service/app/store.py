@@ -1042,3 +1042,91 @@ def record_cancellation_feedback(
              VALUES (%s, %s, %s)""",
         (tenant_id, json.dumps(respostas) if respostas else None, comentario),
     )
+
+
+# --- Suporte: chamados (tickets) ------------------------------------------
+
+_TICKET_COLS = ("id, assunto, categoria, prioridade, status, created_at, updated_at")
+
+
+def create_ticket(
+    tenant_id: int, user_id: int | None, assunto: str, categoria: str,
+    prioridade: str, descricao: str,
+) -> dict:
+    rows = execute(
+        f"""INSERT INTO tickets (tenant_id, user_id, assunto, categoria, prioridade)
+             VALUES (%s, %s, %s, %s, %s) RETURNING {_TICKET_COLS}""",
+        (tenant_id, user_id, assunto, categoria, prioridade), returning=True,
+    )
+    t = rows[0]
+    # a descrição inicial vira a primeira mensagem do chamado
+    execute(
+        """INSERT INTO ticket_mensagens (ticket_id, tenant_id, autor, corpo)
+             VALUES (%s, %s, 'cliente', %s)""",
+        (t["id"], tenant_id, descricao),
+    )
+    return t
+
+
+def list_tickets(tenant_id: int, status: str | None = None) -> list[dict]:
+    where = "WHERE t.tenant_id = %s"
+    params: list = [tenant_id]
+    if status:
+        where += " AND t.status = %s"
+        params.append(status)
+    return query(
+        f"""SELECT {', '.join('t.' + c for c in _TICKET_COLS.split(', '))},
+                  (SELECT count(*) FROM ticket_mensagens m WHERE m.ticket_id = t.id) AS mensagens
+             FROM tickets t {where}
+            ORDER BY (t.status IN ('resolvido','fechado')), t.updated_at DESC""",
+        tuple(params),
+    )
+
+
+def get_ticket(tenant_id: int, ticket_id: int) -> dict | None:
+    rows = query(
+        f"SELECT {_TICKET_COLS} FROM tickets WHERE tenant_id = %s AND id = %s",
+        (tenant_id, ticket_id),
+    )
+    if not rows:
+        return None
+    t = rows[0]
+    t["mensagens"] = query(
+        """SELECT autor, corpo, created_at FROM ticket_mensagens
+            WHERE ticket_id = %s AND tenant_id = %s ORDER BY created_at""",
+        (ticket_id, tenant_id),
+    )
+    return t
+
+
+def add_ticket_message(
+    tenant_id: int, ticket_id: int, autor: str, corpo: str
+) -> dict | None:
+    """Adiciona mensagem ao chamado e atualiza o updated_at (best-effort de status:
+    mensagem do cliente reabre um chamado resolvido)."""
+    if not get_ticket(tenant_id, ticket_id):
+        return None
+    execute(
+        """INSERT INTO ticket_mensagens (ticket_id, tenant_id, autor, corpo)
+             VALUES (%s, %s, %s, %s)""",
+        (ticket_id, tenant_id, autor, corpo),
+    )
+    novo_status = "aberto" if autor == "cliente" else "em_andamento"
+    execute(
+        """UPDATE tickets SET updated_at = now(),
+               status = CASE WHEN status IN ('resolvido','fechado') THEN %s ELSE status END
+             WHERE tenant_id = %s AND id = %s""",
+        (novo_status, tenant_id, ticket_id),
+    )
+    return get_ticket(tenant_id, ticket_id)
+
+
+def set_ticket_status(tenant_id: int, ticket_id: int, status: str) -> dict | None:
+    rows = execute(
+        f"""UPDATE tickets SET status = %s, updated_at = now()
+             WHERE tenant_id = %s AND id = %s RETURNING {_TICKET_COLS}""",
+        (status, tenant_id, ticket_id), returning=True,
+    )
+    if not rows:
+        return None
+    return get_ticket(tenant_id, ticket_id)

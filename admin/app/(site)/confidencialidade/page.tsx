@@ -64,7 +64,7 @@ export default function ConfidencialidadePage() {
           cliente e a legislação (Lei nº 13.709/2018 – LGPD). O cliente é
           responsável por ter base legal para o tratamento e por atender às
           solicitações dos titulares; o AtentBot dá o suporte técnico razoável.
-          Encarregado/DPO: [inserir contato].
+          Encarregado/DPO (contato): <a href="mailto:contato@dewconsultoria.com.br" className="font-medium text-accent-ink hover:underline">contato@dewconsultoria.com.br</a>.
         </p>
 
         <H>6. Segurança</H>
@@ -89,7 +89,8 @@ export default function ConfidencialidadePage() {
 
         <H>9. Contato</H>
         <p>
-          Para assuntos de privacidade e confidencialidade: [inserir e-mail]. Sobre
+          Para assuntos de privacidade e confidencialidade:{" "}
+          <a href="mailto:contato@dewconsultoria.com.br" className="font-medium text-accent-ink hover:underline">contato@dewconsultoria.com.br</a>. Sobre
           valores, veja as{" "}
           <Link href="/cobranca" className="font-medium text-accent-ink hover:underline">
             Regras de Cobrança

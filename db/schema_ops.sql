@@ -291,6 +291,33 @@ CREATE TABLE IF NOT EXISTS stripe_events (
     received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 6c) Suporte: chamados dos clientes (abertura + acompanhamento) -------------
+CREATE TABLE IF NOT EXISTS tickets (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id     BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    assunto     TEXT NOT NULL,
+    categoria   TEXT NOT NULL DEFAULT 'duvida'
+                  CHECK (categoria IN ('duvida','problema_tecnico','cobranca','sugestao','outro')),
+    prioridade  TEXT NOT NULL DEFAULT 'normal'
+                  CHECK (prioridade IN ('baixa','normal','alta')),
+    status      TEXT NOT NULL DEFAULT 'aberto'
+                  CHECK (status IN ('aberto','em_andamento','resolvido','fechado')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_tickets_tenant ON tickets(tenant_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ticket_mensagens (
+    id          BIGSERIAL PRIMARY KEY,
+    ticket_id   BIGINT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    tenant_id   BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    autor       TEXT NOT NULL CHECK (autor IN ('cliente','suporte')),
+    corpo       TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_msgs ON ticket_mensagens(ticket_id, created_at);
+
 -- 6b) Medição de consumo pay-per-use por tenant (tokens) ---------------------
 -- Fonte do "quanto mais dados, mais cobramos": cada indexação (embeddings) e
 -- cada resposta do agente (LLM) registra tokens estimados + custo em BRL.

@@ -179,6 +179,21 @@ class CancelRequest(BaseModel):
     comentario: str | None = None   # relato livre do cliente
 
 
+class TicketCreate(BaseModel):
+    assunto: str
+    descricao: str
+    categoria: str = "duvida"
+    prioridade: str = "normal"
+
+
+class TicketMensagem(BaseModel):
+    corpo: str
+
+
+class TicketStatus(BaseModel):
+    status: str
+
+
 class InstanciaCreate(BaseModel):
     nome: str
 
@@ -299,6 +314,74 @@ async def billing_webhook(request: Request):
     payload = await request.body()
     sig = request.headers.get("stripe-signature")
     return billing.processar_webhook(payload, sig)
+
+
+# =========================================================================
+# Suporte / Chamados (abertura + acompanhamento pelo cliente)
+# Auth-only (sem exigir assinatura ativa): um cliente lapsado ainda precisa
+# falar com o suporte (ex.: sobre cobrança).
+# =========================================================================
+
+_TICKET_CATEGORIAS = {"duvida", "problema_tecnico", "cobranca", "sugestao", "outro"}
+_TICKET_PRIORIDADES = {"baixa", "normal", "alta"}
+
+
+@app.get("/suporte/config")
+def suporte_config(tenant: TenantCtx = Depends(current_tenant)):
+    return {"email": settings.support_email}
+
+
+@app.get("/suporte/chamados")
+def suporte_listar(status: str | None = None,
+                   tenant: TenantCtx = Depends(current_tenant)):
+    return store.list_tickets(tenant.tenant_id, status)
+
+
+@app.post("/suporte/chamados")
+def suporte_criar(req: TicketCreate, tenant: TenantCtx = Depends(current_tenant)):
+    assunto = req.assunto.strip()
+    descricao = req.descricao.strip()
+    if not assunto or not descricao:
+        raise HTTPException(status_code=422, detail="informe assunto e descrição")
+    if req.categoria not in _TICKET_CATEGORIAS:
+        raise HTTPException(status_code=422, detail="categoria inválida")
+    if req.prioridade not in _TICKET_PRIORIDADES:
+        raise HTTPException(status_code=422, detail="prioridade inválida")
+    return store.create_ticket(
+        tenant.tenant_id, tenant.user_id, assunto, req.categoria, req.prioridade, descricao
+    )
+
+
+@app.get("/suporte/chamados/{ticket_id}")
+def suporte_ver(ticket_id: int, tenant: TenantCtx = Depends(current_tenant)):
+    t = store.get_ticket(tenant.tenant_id, ticket_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="chamado não encontrado")
+    return t
+
+
+@app.post("/suporte/chamados/{ticket_id}/mensagens")
+def suporte_responder(ticket_id: int, req: TicketMensagem,
+                      tenant: TenantCtx = Depends(current_tenant)):
+    corpo = req.corpo.strip()
+    if not corpo:
+        raise HTTPException(status_code=422, detail="mensagem vazia")
+    t = store.add_ticket_message(tenant.tenant_id, ticket_id, "cliente", corpo)
+    if t is None:
+        raise HTTPException(status_code=404, detail="chamado não encontrado")
+    return t
+
+
+@app.patch("/suporte/chamados/{ticket_id}")
+def suporte_status(ticket_id: int, req: TicketStatus,
+                   tenant: TenantCtx = Depends(current_tenant)):
+    # O cliente só pode fechar ou reabrir o próprio chamado.
+    if req.status not in {"aberto", "fechado"}:
+        raise HTTPException(status_code=422, detail="status inválido")
+    t = store.set_ticket_status(tenant.tenant_id, ticket_id, req.status)
+    if t is None:
+        raise HTTPException(status_code=404, detail="chamado não encontrado")
+    return t
 
 
 # =========================================================================

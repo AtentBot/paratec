@@ -85,7 +85,8 @@ export default function CobrancaPage() {
 
         <H>7. Contato</H>
         <p>
-          Dúvidas sobre cobrança: [inserir e-mail/contato de suporte]. Regras
+          Dúvidas sobre cobrança:{" "}
+          <a href="mailto:contato@dewconsultoria.com.br" className="font-medium text-accent-ink hover:underline">contato@dewconsultoria.com.br</a>. Regras
           relacionadas ao tratamento de dados estão na{" "}
           <Link href="/confidencialidade" className="font-medium text-accent-ink hover:underline">
             Política de Confidencialidade

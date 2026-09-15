@@ -264,3 +264,32 @@ export interface Uso {
   cobranca_automatica: boolean;
   precos: { embedding_por_1k: number; chat_por_1k: number };
 }
+
+// --- Suporte / Chamados ---
+export interface TicketMsg {
+  autor: "cliente" | "suporte";
+  corpo: string;
+  created_at: string;
+}
+
+export interface TicketResumo {
+  id: number;
+  assunto: string;
+  categoria: string;
+  prioridade: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  mensagens: number;
+}
+
+export interface TicketDetalhe {
+  id: number;
+  assunto: string;
+  categoria: string;
+  prioridade: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  mensagens: TicketMsg[];
+}

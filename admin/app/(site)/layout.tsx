@@ -38,6 +38,7 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
             <Link href="/precos" className="hover:text-ink">Planos</Link>
             <Link href="/cobranca" className="hover:text-ink">Regras de cobrança</Link>
             <Link href="/confidencialidade" className="hover:text-ink">Confidencialidade</Link>
+            <a href="mailto:contato@dewconsultoria.com.br" className="hover:text-ink">Contato</a>
             <Link href="/login" className="hover:text-ink">Entrar</Link>
           </span>
         </div>

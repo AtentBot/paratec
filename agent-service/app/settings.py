@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # URL pública do painel adm (usada no link dos alertas aos vendedores).
     panel_url: str = "https://app.atentbot.com"
 
+    # E-mail de suporte/contato exibido ao cliente (páginas legais, tela de suporte).
+    support_email: str = "contato@dewconsultoria.com.br"
+
     # -----------------------------------------------------------------------
     # Multi-tenant / autenticação de aplicação
     # -----------------------------------------------------------------------

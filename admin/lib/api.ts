@@ -20,6 +20,8 @@ import type {
   RagFonte,
   RagStatus,
   RelatorioResumo,
+  TicketDetalhe,
+  TicketResumo,
   Vendedor,
   WhatsappConfig,
   WhatsappInstancia,
@@ -117,6 +119,19 @@ export const api = {
   cancelarAssinatura: (pesquisa?: { respostas?: Record<string, string>; comentario?: string }) =>
     send<AssinaturaStatus>("POST", "/billing/cancel", pesquisa ?? {}),
   reativarAssinatura: () => send<AssinaturaStatus>("POST", "/billing/reactivate"),
+
+  // --- Suporte / Chamados ---
+  suporteEmail: () => get<{ email: string }>("/suporte/config"),
+  chamados: (status?: string) =>
+    get<TicketResumo[]>(`/suporte/chamados${status ? `?status=${status}` : ""}`),
+  chamado: (id: number) => get<TicketDetalhe>(`/suporte/chamados/${id}`),
+  abrirChamado: (body: {
+    assunto: string; descricao: string; categoria?: string; prioridade?: string;
+  }) => send<TicketResumo>("POST", "/suporte/chamados", body),
+  responderChamado: (id: number, corpo: string) =>
+    send<TicketDetalhe>("POST", `/suporte/chamados/${id}/mensagens`, { corpo }),
+  statusChamado: (id: number, status: string) =>
+    send<TicketDetalhe>("PATCH", `/suporte/chamados/${id}`, { status }),
 
   // Relatórios (por período)
   relatorioResumo: (desde: string, ate: string) =>
