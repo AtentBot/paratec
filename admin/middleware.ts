@@ -13,6 +13,16 @@ const PROTEGIDAS = [
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // Proxy /agent/*: bloqueia publicamente o /chat (endpoint sem auth, usado só
+  // pelo n8n via rede interna). Os demais /agent/* passam (a autorização é do
+  // backend: endpoints operacionais exigem sessão; /auth e /billing/webhook são
+  // públicos por design).
+  if (pathname === "/agent/chat" || pathname.startsWith("/agent/chat/")) {
+    return new NextResponse("Not found", { status: 404 });
+  }
+  if (pathname.startsWith("/agent/")) return NextResponse.next();
+
   const protegida = PROTEGIDAS.some((p) => pathname === p || pathname.startsWith(p + "/"));
   if (!protegida) return NextResponse.next();
 
@@ -26,6 +36,6 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Ignora estáticos, o proxy /agent e a pasta /media.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|agent|media).*)"],
+  // Roda em tudo, exceto estáticos e /media. Inclui /agent p/ bloquear /agent/chat.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|media).*)"],
 };
