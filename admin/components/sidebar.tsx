@@ -245,17 +245,19 @@ export function Sidebar() {
           </span>
         </button>
         <div className="flex items-center gap-3 rounded-lg px-2 py-2">
-          <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-xs font-semibold uppercase text-accent-ink">
-            {(me?.nome || me?.email || "?").slice(0, 2)}
-          </span>
-          <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-xs font-medium text-ink">
-              {me?.nome || me?.email || "—"}
-            </p>
-            <p className="truncate text-[11px] text-muted">
-              {me?.role === "owner" ? "Responsável" : "Atendente"}
-            </p>
-          </div>
+          <Link href="/conta" className="flex min-w-0 flex-1 items-center gap-3 rounded-lg transition hover:opacity-80" title="Minha conta">
+            <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-xs font-semibold uppercase text-accent-ink">
+              {(me?.nome || me?.email || "?").slice(0, 2)}
+            </span>
+            <div className="min-w-0 flex-1 leading-tight">
+              <p className="truncate text-xs font-medium text-ink">
+                {me?.nome || me?.email || "—"}
+              </p>
+              <p className="truncate text-[11px] text-muted">
+                {me?.role === "owner" ? "Responsável" : "Atendente"}
+              </p>
+            </div>
+          </Link>
           <button
             onClick={logout}
             title="Sair"

@@ -905,6 +905,18 @@ def get_user(user_id: int) -> dict | None:
     return rows[0] if rows else None
 
 
+def get_password_hash(user_id: int) -> str | None:
+    rows = query("SELECT password_hash FROM users WHERE id = %s", (user_id,))
+    return rows[0]["password_hash"] if rows else None
+
+
+def set_password(user_id: int, password_hash: str) -> None:
+    execute(
+        "UPDATE users SET password_hash = %s, updated_at = now() WHERE id = %s",
+        (password_hash, user_id),
+    )
+
+
 # --- Sessões --------------------------------------------------------------
 
 def create_session(user_id: int, token_hash: str, expires_at) -> None:

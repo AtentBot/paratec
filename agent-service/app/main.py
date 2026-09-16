@@ -262,6 +262,17 @@ def auth_logout(request: Request, response: Response):
     return {"ok": True}
 
 
+class TrocarSenhaReq(BaseModel):
+    senha_atual: str
+    senha_nova: str
+
+
+@app.post("/auth/change-password")
+def auth_change_password(req: TrocarSenhaReq, tenant: TenantCtx = Depends(current_tenant)):
+    auth.trocar_senha(tenant.user_id, req.senha_atual, req.senha_nova)
+    return {"ok": True}
+
+
 @app.get("/auth/me")
 def auth_me(tenant: TenantCtx = Depends(current_tenant)):
     t = store.get_tenant(tenant.tenant_id)

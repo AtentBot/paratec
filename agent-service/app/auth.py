@@ -123,6 +123,16 @@ def signup(nome_empresa: str, email: str, senha: str, nome: str | None = None) -
     return {"tenant": tenant, "user": user}
 
 
+def trocar_senha(user_id: int, atual: str, nova: str) -> None:
+    """Troca a senha do usuário logado (valida a atual). 400/401 em erro."""
+    if len(nova or "") < 8:
+        raise HTTPException(400, "a nova senha deve ter ao menos 8 caracteres")
+    h = store.get_password_hash(user_id)
+    if not h or not verificar_senha(h, atual or ""):
+        raise HTTPException(401, "senha atual incorreta")
+    store.set_password(user_id, hash_senha(nova))
+
+
 def login(email: str, senha: str) -> dict:
     """Valida credenciais e devolve o usuário (sem abrir sessão). 401 se inválido."""
     u = store.get_user_by_email((email or "").strip())

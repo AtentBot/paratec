@@ -122,6 +122,8 @@ export const api = {
       "POST", "/auth/signup", body,
     ),
   logout: () => send<{ ok: boolean }>("POST", "/auth/logout"),
+  trocarSenha: (senha_atual: string, senha_nova: string) =>
+    send<{ ok: boolean }>("POST", "/auth/change-password", { senha_atual, senha_nova }),
 
   // --- Billing (Stripe) ---
   planos: () => get<Plano[]>("/billing/plans"),
