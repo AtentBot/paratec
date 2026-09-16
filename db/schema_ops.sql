@@ -185,7 +185,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_instancia
 -- É editável pelo analista (persona/capacidades) mas não pode ser removido nem
 -- amarrado a um número. Só pode haver um (índice único parcial).
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT false;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_default ON agents(is_default) WHERE is_default;
+-- O índice de agente padrão é criado por-tenant na seção 9 (multi-tenant).
+-- (Não recriar o índice GLOBAL aqui: com vários tenants ele viola a unicidade.)
 
 -- Hiperpersonalização (opt-in por agente): quando ligada, o agente recebe um
 -- bloco de CONTEXTO do cliente (perfil + últimos orçamentos/solicitações) para
