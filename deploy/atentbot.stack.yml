@@ -1,0 +1,137 @@
+# =============================================================================
+# AtentBot — stack de produção (Docker SWARM) — site público + painel + agentes
+#
+# CONTEXTO (estado real do servidor Hetzner, Swarm ativo — node "Athena-Evento"):
+#   - Os serviços `paratec-admin` e `paratec-agent` HOJE rodam como serviços
+#     Swarm STANDALONE (criados via `docker service create`, fora de qualquer
+#     stack). Por isso sobreviveram quando a stack "atentbot" foi deletada.
+#   - A stack "atentbot" deletada continha o ROTEAMENTO do Traefik para
+#     atentbot.com/app.atentbot.com. Ao ser removida, o site público caiu (404):
+#     o `paratec-admin` só tinha router para Host(`paratec.atentbot.com`), atrás
+#     do Authentik.
+#
+# FIX IMEDIATO (aplicado sem este arquivo — só troca labels do serviço que já
+# roda; sobe o site em segundos, sem rebuild):
+#   docker service update \
+#     --label-add 'traefik.http.routers.paratec-admin.rule=Host(`atentbot.com`) || Host(`paratec.atentbot.com`)' \
+#     --label-rm  'traefik.http.routers.paratec-admin.middlewares' \
+#     paratec-admin
+#   (rollback: re-add a rule antiga + --label-add ...middlewares=authentik)
+#
+# ESTE ARQUIVO = a MESMA configuração, agora VERSIONADA e reproduzível, para o
+# dia em que a gente migrar de "serviços soltos" para uma stack gerenciada. É a
+# fonte de verdade do roteamento (que antes só existia dentro do Portainer).
+#
+# VALORES REAIS DA INFRA (descobertos no servidor):
+#   rede pública do Traefik : traefik_public   (overlay, external)
+#   rede interna admin<->agent: app_network     (overlay, external)
+#   entrypoint HTTPS         : websecure
+#   certresolver ACME        : le
+#
+# ---------------------------------------------------------------------------
+# COMO USAR (migração para stack gerenciada — OPCIONAL, off-peak):
+#   Swarm NÃO builda de Dockerfile. As imagens precisam existir/ser publicadas:
+#     # no manager (single-node), build local já é suficiente p/ o Swarm agendar:
+#     docker build -t atentbot/agent-service:latest -f agent-service/Dockerfile .
+#     docker build -t atentbot/admin:latest ./admin
+#   Para deploy multi-node (ou CI), publique num registry (Docker Hub `atentbot/*`
+#   já usado por outros serviços) e troque as tags abaixo.
+#
+#   ANTES de subir esta stack, remova os serviços standalone p/ não conflitar no
+#   Traefik (mesmo router/host):
+#     docker service rm paratec-admin paratec-agent      # (com backup dos specs)
+#   Depois:
+#     docker stack deploy -c deploy/atentbot.stack.yml atentbot
+#   (ou Portainer -> Stacks -> Add stack -> Repository -> path deploy/atentbot.stack.yml)
+#   Preencha as variáveis (${...}) nas env vars da stack — ver docs/DEPLOY_SAAS.md.
+# =============================================================================
+
+version: "3.8"
+
+services:
+  # Cérebro dos agentes (FastAPI + LangGraph). PRIVADO (sem labels Traefik).
+  # Alcançado pelo admin (proxy /agent -> agent-service:8000) e pelo n8n.
+  agent-service:
+    image: ${AGENT_IMAGE:-atentbot/agent-service:latest}
+    environment:
+      PGHOST: ${PGHOST:-pg.atentbot.com}
+      PGPORT: ${PGPORT:-5432}
+      PGDATABASE: ${PGDATABASE:-paratec}
+      PGUSER: ${PGUSER:-postgres}
+      PGPASSWORD: ${PGPASSWORD:?defina nas env vars da stack}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?defina nas env vars da stack}
+      LLM_MODEL: ${LLM_MODEL:-gemini-flash-latest}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-paratec}
+      EVOLUTION_WEBHOOK_URL: ${EVOLUTION_WEBHOOK_URL:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://atentbot.com}
+      # Billing/sessão (vazio = enforcement desligado; ver docs/DEPLOY_SAAS.md).
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_ESSENCIAL: ${STRIPE_PRICE_ESSENCIAL:-}
+      STRIPE_PRICE_PROFISSIONAL: ${STRIPE_PRICE_PROFISSIONAL:-}
+      STRIPE_PRICE_ESCALA: ${STRIPE_PRICE_ESCALA:-}
+      BILLING_SUCCESS_URL: ${BILLING_SUCCESS_URL:-https://atentbot.com/checkout/sucesso}
+      BILLING_CANCEL_URL: ${BILLING_CANCEL_URL:-https://atentbot.com/checkout/cancelado}
+      PAST_DUE_GRACE_DAYS: ${PAST_DUE_GRACE_DAYS:-3}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
+      DEFAULT_TENANT_SLUG: ${DEFAULT_TENANT_SLUG:-paratec}
+      PANEL_URL: ${PANEL_URL:-https://atentbot.com}
+      MEDIA_DIR: /app/media
+    networks:
+      app_network:
+        # Preserva o nome que o n8n/Evolution já usam p/ chamar o agente.
+        aliases:
+          - paratec-agent
+    volumes:
+      - agent_media:/app/media
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        order: start-first
+
+  # Painel + landing (Next.js standalone). ÚNICO serviço público (via Traefik).
+  admin:
+    image: ${ADMIN_IMAGE:-atentbot/admin:latest}
+    environment:
+      AGENT_INTERNAL_URL: http://paratec-agent:8000
+      NODE_ENV: production
+    networks:
+      - app_network
+      - traefik_public
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        order: start-first
+      # No Swarm, o provider do Traefik lê os labels do SERVIÇO -> deploy.labels.
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik_public"
+        - "traefik.http.routers.atentbot.rule=Host(`atentbot.com`) || Host(`paratec.atentbot.com`)"
+        - "traefik.http.routers.atentbot.entrypoints=websecure"
+        - "traefik.http.routers.atentbot.tls=true"
+        - "traefik.http.routers.atentbot.tls.certresolver=le"
+        - "traefik.http.services.atentbot.loadbalancer.server.port=3000"
+        # Quando app.atentbot.com/www tiverem DNS apontando p/ o servidor,
+        # inclua-os na rule acima (ex: || Host(`app.atentbot.com`)); só então
+        # o Traefik consegue emitir o certificado ACME desses hosts.
+
+networks:
+  # Redes overlay que JÁ existem no Swarm (external => não recria).
+  traefik_public:
+    external: true
+  app_network:
+    external: true
+
+volumes:
+  # Reaproveita o volume de mídia existente (banners de promoções).
+  agent_media:
+    external: true
+    name: paratec_agent_media
