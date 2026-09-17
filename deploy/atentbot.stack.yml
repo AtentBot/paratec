@@ -114,7 +114,10 @@ services:
       labels:
         - "traefik.enable=true"
         - "traefik.docker.network=traefik_public"
-        - "traefik.http.routers.atentbot.rule=Host(`atentbot.com`) || Host(`paratec.atentbot.com`)"
+        # Hosts atendidos. Para incluir www/app (SÓ depois de o DNS deles resolver —
+        # senão o ACME/le falha ao emitir o certificado), defina a variável no deploy:
+        #   ADMIN_ROUTER_RULE='Host(`atentbot.com`) || Host(`www.atentbot.com`) || Host(`app.atentbot.com`)'
+        - "traefik.http.routers.atentbot.rule=${ADMIN_ROUTER_RULE:-Host(`atentbot.com`) || Host(`paratec.atentbot.com`)}"
         - "traefik.http.routers.atentbot.entrypoints=websecure"
         - "traefik.http.routers.atentbot.tls=true"
         - "traefik.http.routers.atentbot.tls.certresolver=le"
