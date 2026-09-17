@@ -190,8 +190,8 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="sticky top-0 flex h-dvh w-[248px] shrink-0 flex-col border-r bg-surface">
-      <div className="flex items-center gap-2.5 px-5 py-5">
+    <aside className="sticky top-0 flex h-dvh w-[248px] shrink-0 flex-col overflow-hidden border-r bg-surface">
+      <div className="flex shrink-0 items-center gap-2.5 px-5 py-5">
         <span className="grid h-9 w-9 place-items-center rounded-xl bg-feature text-accent shadow-card">
           <Zap size={18} className="fill-accent" />
         </span>
@@ -203,7 +203,9 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-1 px-3 py-2">
+      {/* min-h-0 + overflow: em telas baixas (ou com o grupo Administração) a
+          lista rola em vez de ser cortada; o rodapé fica fixo embaixo. */}
+      <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-3 py-2">
         <p className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-faint">
           Operação
         </p>
@@ -234,7 +236,7 @@ export function Sidebar() {
         )}
       </nav>
 
-      <div className="border-t px-4 py-3">
+      <div className="shrink-0 border-t px-4 py-3">
         <button
           onClick={toggleSom}
           title={som ? "Som de novas mensagens: ligado" : "Som de novas mensagens: desligado"}
