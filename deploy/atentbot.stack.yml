@@ -31,7 +31,10 @@ services:
     env_file:
       - atentbot.agent.env
     networks:
-      - app_network
+      app_network:
+        # admin e n8n chamam o agente por este hostname — NÃO remover.
+        aliases:
+          - paratec-agent
     volumes:
       - paratec_agent_media:/app/media
     deploy:
