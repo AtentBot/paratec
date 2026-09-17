@@ -1,6 +1,7 @@
 // Cliente do agent-service (FastAPI). Todas as seções agora consomem dados
 // reais; não há mais fixtures. Falhas de rede são tratadas por `tryApi`.
 import type {
+  AdminApiChave,
   AdminConsumoTenant,
   AdminOverview,
   AdminPlanos,
@@ -8,6 +9,11 @@ import type {
   AdminTicketDetalhe,
   AdminTicketResumo,
   Agente,
+  ApiChave,
+  ApiChaveCriada,
+  ApiEscopo,
+  ApiLog,
+  ApiResumo,
   AssinaturaStatus,
   Broadcast,
   Capacidade,
@@ -67,6 +73,22 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+/** Como `send`, mas propaga a mensagem `detail` do backend (validações). */
+async function sendDetalhe<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    const d = data?.detail;
+    throw new Error(typeof d === "string" ? d : `${method} ${path} -> ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -169,6 +191,31 @@ export const api = {
     send<AdminTicketDetalhe>("POST", `/admin/chamados/${id}/mensagens`, { corpo }),
   adminAtualizarChamado: (id: number, body: { status?: string; prioridade?: string }) =>
     send<AdminTicketDetalhe>("PATCH", `/admin/chamados/${id}`, body),
+
+  // --- Integrações (API pública por tenant) ---
+  apiEscopos: () => get<{ escopos: ApiEscopo[]; max_chaves: number }>("/integracoes/escopos"),
+  apiResumo: () => get<ApiResumo>("/integracoes/resumo"),
+  apiChaves: () => get<ApiChave[]>("/integracoes/chaves"),
+  apiCriarChave: (body: {
+    nome: string;
+    escopos: string[];
+    ips_permitidos: string[];
+    rate_limit_min: number;
+    expira_em_dias: number | null;
+  }) => sendDetalhe<ApiChaveCriada>("POST", "/integracoes/chaves", body),
+  apiAtualizarChave: (
+    id: number,
+    body: { nome?: string; escopos?: string[]; ips_permitidos?: string[]; rate_limit_min?: number },
+  ) => sendDetalhe<ApiChave>("PATCH", `/integracoes/chaves/${id}`, body),
+  apiRotacionarChave: (id: number) =>
+    sendDetalhe<ApiChaveCriada>("POST", `/integracoes/chaves/${id}/rotacionar`),
+  apiRevogarChave: (id: number) => sendDetalhe<ApiChave>("DELETE", `/integracoes/chaves/${id}`),
+  apiLogs: (p: { chave_id?: number; limit?: number; offset?: number } = {}) =>
+    get<{ items: ApiLog[]; total: number }>(`/integracoes/logs?${_qs(p)}`),
+  adminApiChaves: (p: { q?: string; limit?: number; offset?: number } = {}) =>
+    get<{ items: AdminApiChave[]; total: number }>(`/admin/integracoes?${_qs(p)}`),
+  adminRevogarApiChave: (id: number) =>
+    sendDetalhe<ApiChave>("POST", `/admin/integracoes/${id}/revogar`),
 
   // Relatórios (por período)
   relatorioResumo: (desde: string, ate: string) =>

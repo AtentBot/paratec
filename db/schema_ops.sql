@@ -520,3 +520,42 @@ CREATE TABLE IF NOT EXISTS plan_price_history (
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_plan_price_history_plan ON plan_price_history(plan_id, created_at DESC);
+
+-- ===========================================================================
+-- API PÚBLICA (integrações REST por tenant).
+-- Cada tenant cria chaves próprias com escopos (permissões por feature).
+-- Guardamos só o SHA-256 da chave; o texto puro aparece UMA vez na criação.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS api_keys (
+    id            BIGSERIAL PRIMARY KEY,
+    tenant_id     BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    nome          TEXT NOT NULL,
+    prefixo       TEXT NOT NULL,             -- início visível da chave (identificação)
+    key_hash      TEXT NOT NULL UNIQUE,      -- sha256 da chave completa
+    escopos       TEXT[] NOT NULL DEFAULT '{}',
+    ips_permitidos TEXT[] NOT NULL DEFAULT '{}',  -- vazio = qualquer IP
+    rate_limit_min INT NOT NULL DEFAULT 60 CHECK (rate_limit_min BETWEEN 1 AND 1000),
+    expires_at    TIMESTAMPTZ,               -- NULL = não expira
+    revoked_at    TIMESTAMPTZ,
+    last_used_at  TIMESTAMPTZ,
+    last_used_ip  TEXT,
+    created_by    BIGINT,                    -- users.id de quem criou (auditoria)
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id, created_at DESC);
+
+-- Auditoria das chamadas à API pública (retenção curta; ver store.purge_api_logs).
+CREATE TABLE IF NOT EXISTS api_request_log (
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    api_key_id  BIGINT REFERENCES api_keys(id) ON DELETE SET NULL,
+    metodo      TEXT NOT NULL,
+    rota        TEXT NOT NULL,
+    status      INT NOT NULL,
+    duracao_ms  INT NOT NULL DEFAULT 0,
+    ip          TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_api_log_tenant ON api_request_log(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_log_key ON api_request_log(api_key_id, created_at DESC);

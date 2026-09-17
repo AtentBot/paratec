@@ -2,6 +2,8 @@
 
 - `/chat` é chamado pelo N8N (fluxo do WhatsApp) — resolve o tenant pela instância.
 - `/auth/*` e `/billing/*` cuidam de login e assinatura (SaaS multi-tenant).
+- `/v1/*` é a API pública de integrações (chave por tenant + escopos) — ver
+  app/api_publica.py.
 - Os demais endpoints (painel) exigem sessão + assinatura ativa e são isolados
   por tenant: cada handler recebe `tenant` (Depends) e repassa tenant.tenant_id
   a store/catalog. Sem esse filtro, haveria vazamento entre clientes.
@@ -27,7 +29,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, billing, catalog, evolution, ingest, mailer, realtime, store
+from . import api_publica, auth, billing, catalog, evolution, ingest, mailer, realtime, store
 from .agents import CAPACIDADES, CAPACIDADES_ORDEM, responder
 from .auth import TenantCtx, current_admin, current_tenant
 from .billing import require_active_subscription
@@ -42,12 +44,19 @@ async def lifespan(_: FastAPI):
         store.ensure_schema()
     except Exception as e:  # pragma: no cover
         logging.getLogger("atentbot").warning("ensure_schema falhou: %s", e)
+    try:
+        store.purge_api_logs(settings.api_log_retencao_dias)
+    except Exception as e:  # pragma: no cover
+        logging.getLogger("atentbot").warning("purge_api_logs falhou: %s", e)
     # Permite publicar eventos SSE a partir de código síncrono (threadpool).
     realtime.broker.bind_loop(asyncio.get_running_loop())
     yield
 
 
 app = FastAPI(title="AtentBot Agent Service", version="1.0.0", lifespan=lifespan)
+
+# API pública de integrações (/v1, chaves por tenant) + gestão das chaves no painel.
+api_publica.instalar(app)
 
 # Diretório dos banners/imagens de promoções (montado em /media). Persistir com
 # um volume Docker em `/app/media` para o histórico manter as miniaturas.

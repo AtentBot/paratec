@@ -12,7 +12,11 @@ const nextConfig = {
   // login/Authentik, sem CORS nem subdomínio de API público).
   async rewrites() {
     const target = process.env.AGENT_INTERNAL_URL || "http://paratec-agent:8000";
-    return [{ source: "/agent/:path*", destination: `${target}/:path*` }];
+    return [
+      { source: "/agent/:path*", destination: `${target}/:path*` },
+      // API pública de integrações (chave por tenant): https://<dominio>/api/v1/...
+      { source: "/api/v1/:path*", destination: `${target}/v1/:path*` },
+    ];
   },
 };
 

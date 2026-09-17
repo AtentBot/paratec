@@ -1438,3 +1438,192 @@ def admin_usage_totais(q: str | None = None) -> dict:
             {where}""",
         tuple(params),
     )[0]
+
+
+# --- API pública: chaves de integração + auditoria --------------------------
+# Chaves são POR TENANT. Só o SHA-256 é persistido; key_hash nunca sai daqui
+# (_API_KEY_COLS não o inclui).
+
+_API_KEY_COLS = """id, tenant_id, nome, prefixo, escopos, ips_permitidos, rate_limit_min,
+                   expires_at, revoked_at, last_used_at, last_used_ip, created_by,
+                   created_at, updated_at"""
+
+
+def create_api_key(
+    tenant_id: int, nome: str, prefixo: str, key_hash: str, escopos: list[str],
+    ips_permitidos: list[str], rate_limit_min: int, expires_at, created_by: int | None,
+) -> dict:
+    rows = execute(
+        f"""INSERT INTO api_keys (tenant_id, nome, prefixo, key_hash, escopos,
+                                  ips_permitidos, rate_limit_min, expires_at, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING {_API_KEY_COLS}""",
+        (tenant_id, nome, prefixo, key_hash, escopos, ips_permitidos, rate_limit_min,
+         expires_at, created_by),
+        returning=True,
+    )
+    return rows[0]
+
+
+def list_api_keys(tenant_id: int) -> list[dict]:
+    return query(
+        f"""SELECT {_API_KEY_COLS},
+                   (SELECT count(*) FROM api_request_log l
+                     WHERE l.api_key_id = k.id AND l.created_at >= now() - interval '24 hours'
+                   ) AS chamadas_24h
+              FROM api_keys k WHERE tenant_id = %s
+             ORDER BY revoked_at IS NOT NULL, created_at DESC""",
+        (tenant_id,),
+    )
+
+
+def get_api_key(tenant_id: int, key_id: int) -> dict | None:
+    rows = query(
+        f"SELECT {_API_KEY_COLS} FROM api_keys WHERE tenant_id = %s AND id = %s",
+        (tenant_id, key_id),
+    )
+    return rows[0] if rows else None
+
+
+def get_api_key_by_hash(key_hash: str) -> dict | None:
+    """Resolve a chave apresentada na requisição (inclui status do tenant)."""
+    rows = query(
+        f"""SELECT {', '.join('k.' + c.strip() for c in _API_KEY_COLS.split(','))},
+                   t.status AS tenant_status
+              FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
+             WHERE k.key_hash = %s""",
+        (key_hash,),
+    )
+    return rows[0] if rows else None
+
+
+def update_api_key(
+    tenant_id: int, key_id: int, *, nome: str | None = None, escopos: list[str] | None = None,
+    ips_permitidos: list[str] | None = None, rate_limit_min: int | None = None,
+) -> dict | None:
+    rows = execute(
+        f"""UPDATE api_keys
+               SET nome = COALESCE(%s, nome),
+                   escopos = COALESCE(%s, escopos),
+                   ips_permitidos = COALESCE(%s, ips_permitidos),
+                   rate_limit_min = COALESCE(%s, rate_limit_min),
+                   updated_at = now()
+             WHERE tenant_id = %s AND id = %s AND revoked_at IS NULL
+            RETURNING {_API_KEY_COLS}""",
+        (nome, escopos, ips_permitidos, rate_limit_min, tenant_id, key_id),
+        returning=True,
+    )
+    return rows[0] if rows else None
+
+
+def revoke_api_key(tenant_id: int, key_id: int) -> dict | None:
+    rows = execute(
+        f"""UPDATE api_keys SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
+             WHERE tenant_id = %s AND id = %s
+            RETURNING {_API_KEY_COLS}""",
+        (tenant_id, key_id),
+        returning=True,
+    )
+    return rows[0] if rows else None
+
+
+def touch_api_key(key_id: int, ip: str | None) -> None:
+    execute(
+        "UPDATE api_keys SET last_used_at = now(), last_used_ip = %s WHERE id = %s",
+        (ip, key_id),
+    )
+
+
+def log_api_request(
+    tenant_id: int, key_id: int | None, metodo: str, rota: str, status: int,
+    duracao_ms: int, ip: str | None,
+) -> None:
+    execute(
+        """INSERT INTO api_request_log (tenant_id, api_key_id, metodo, rota, status, duracao_ms, ip)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (tenant_id, key_id, metodo, rota[:300], status, duracao_ms, ip),
+    )
+
+
+def list_api_logs(tenant_id: int, key_id: int | None = None, limit: int = 50,
+                  offset: int = 0) -> dict:
+    conds = ["l.tenant_id = %s"]
+    params: list = [tenant_id]
+    if key_id:
+        conds.append("l.api_key_id = %s")
+        params.append(key_id)
+    where = " AND ".join(conds)
+    total = query(f"SELECT count(*) AS n FROM api_request_log l WHERE {where}", tuple(params))[0]["n"]
+    items = query(
+        f"""SELECT l.id, l.api_key_id, k.nome AS chave, k.prefixo, l.metodo, l.rota,
+                   l.status, l.duracao_ms, l.ip, l.created_at
+              FROM api_request_log l LEFT JOIN api_keys k ON k.id = l.api_key_id
+             WHERE {where}
+             ORDER BY l.created_at DESC LIMIT %s OFFSET %s""",
+        tuple(params + [limit, offset]),
+    )
+    return {"items": items, "total": int(total)}
+
+
+def api_uso_resumo(tenant_id: int) -> dict:
+    """Chamadas das últimas 24h (total/erros) + chaves ativas do tenant."""
+    r = query(
+        """SELECT count(*) AS chamadas,
+                  count(*) FILTER (WHERE status >= 400) AS erros
+             FROM api_request_log
+            WHERE tenant_id = %s AND created_at >= now() - interval '24 hours'""",
+        (tenant_id,),
+    )[0]
+    ativas = query(
+        """SELECT count(*) AS n FROM api_keys
+            WHERE tenant_id = %s AND revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())""",
+        (tenant_id,),
+    )[0]["n"]
+    return {"chamadas_24h": int(r["chamadas"]), "erros_24h": int(r["erros"]),
+            "chaves_ativas": int(ativas)}
+
+
+def purge_api_logs(dias: int = 90) -> int:
+    rows = execute(
+        "DELETE FROM api_request_log WHERE created_at < now() - make_interval(days => %s) RETURNING id",
+        (dias,), returning=True,
+    )
+    return len(rows or [])
+
+
+def admin_list_api_keys(q: str | None = None, limit: int = 25, offset: int = 0) -> dict:
+    """CROSS-TENANT (só via current_admin): todas as chaves p/ auditoria/revogação."""
+    conds, params = ["TRUE"], []
+    if q:
+        like = f"%{q}%"
+        conds.append("(t.nome ILIKE %s OR k.nome ILIKE %s OR k.prefixo ILIKE %s)")
+        params += [like, like, like]
+    where = " AND ".join(conds)
+    total = query(
+        f"SELECT count(*) AS n FROM api_keys k JOIN tenants t ON t.id = k.tenant_id WHERE {where}",
+        tuple(params),
+    )[0]["n"]
+    items = query(
+        f"""SELECT k.id, k.tenant_id, t.nome AS tenant_nome, k.nome, k.prefixo, k.escopos,
+                   k.ips_permitidos, k.expires_at, k.revoked_at, k.last_used_at,
+                   k.last_used_ip, k.created_at,
+                   (SELECT count(*) FROM api_request_log l
+                     WHERE l.api_key_id = k.id AND l.created_at >= now() - interval '24 hours'
+                   ) AS chamadas_24h
+              FROM api_keys k JOIN tenants t ON t.id = k.tenant_id
+             WHERE {where}
+             ORDER BY k.revoked_at IS NOT NULL, k.last_used_at DESC NULLS LAST, k.created_at DESC
+             LIMIT %s OFFSET %s""",
+        tuple(params + [limit, offset]),
+    )
+    return {"items": items, "total": int(total)}
+
+
+def admin_revoke_api_key(key_id: int) -> dict | None:
+    rows = execute(
+        f"""UPDATE api_keys SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
+             WHERE id = %s RETURNING {_API_KEY_COLS}""",
+        (key_id,), returning=True,
+    )
+    return rows[0] if rows else None

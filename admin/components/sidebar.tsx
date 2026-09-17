@@ -23,6 +23,7 @@ import {
   Gauge,
   Tags,
   LogOut,
+  PlugZap,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -53,6 +54,7 @@ const NAV: NavItem[] = [
 const SISTEMA: NavItem[] = [
   { href: "/agentes", label: "Agentes", icon: Bot },
   { href: "/configuracoes", label: "Configurações", icon: Settings },
+  { href: "/integracoes", label: "Integrações (API)", icon: PlugZap },
   { href: "/assinatura", label: "Assinatura", icon: CreditCard },
   { href: "/suporte", label: "Suporte", icon: LifeBuoy },
 ];
@@ -64,6 +66,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/assinaturas", label: "Assinaturas", icon: CreditCard },
   { href: "/admin/planos", label: "Planos e preços", icon: Tags },
   { href: "/admin/consumo", label: "Consumo", icon: Gauge },
+  { href: "/admin/integracoes", label: "Chaves de API", icon: PlugZap },
 ];
 
 function NavLink({ item, path }: { item: NavItem; path: string }) {

@@ -18,6 +18,7 @@ const TITLES: Record<string, { title: string; sub: string }> = {
   "/fila": { title: "Fila humana", sub: "Pedidos, entregas e boletos" },
   "/agentes": { title: "Agentes", sub: "Multi-agente por número de WhatsApp" },
   "/configuracoes": { title: "Configurações", sub: "Conexões de WhatsApp" },
+  "/integracoes": { title: "Integrações", sub: "API REST para conectar seus sistemas" },
   "/assinatura": { title: "Assinatura", sub: "Seu plano e cobrança" },
   "/suporte": { title: "Suporte", sub: "Chamados e contato" },
   "/conta": { title: "Minha conta", sub: "Perfil e senha" },

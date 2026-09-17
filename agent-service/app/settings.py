@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # E-mail de suporte/contato exibido ao cliente (páginas legais, tela de suporte).
     support_email: str = "contato@dewconsultoria.com.br"
 
+    # API pública (integrações REST por tenant). Limite de chaves ativas por
+    # tenant e retenção (dias) do log de auditoria das chamadas.
+    api_max_chaves_por_tenant: int = 20
+    api_log_retencao_dias: int = 90
+
     # SMTP p/ notificações por e-mail (abertura/atualização de chamados). Vazio =
     # desabilitado (chamados ficam só no painel). NÃO commitar SMTP_PASS — use
     # .env.docker (gitignored). smtp_ssl=true usa STARTTLS na 587 / SSL na 465.

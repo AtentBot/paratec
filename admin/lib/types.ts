@@ -386,3 +386,56 @@ export interface AdminConsumoTenant {
   tokens: number;
   custo: number;
 }
+
+// --- Integrações (API pública) ---
+export interface ApiEscopo {
+  id: string;
+  grupo: string;
+  label: string;
+  descricao: string;
+  escrita: boolean;
+}
+
+export interface ApiChave {
+  id: number;
+  tenant_id: number;
+  nome: string;
+  prefixo: string;
+  escopos: string[];
+  ips_permitidos: string[];
+  rate_limit_min: number;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  last_used_ip: string | null;
+  created_at: string;
+  chamadas_24h?: number;
+}
+
+/** Retorno da criação/rotação: o texto puro da chave só vem aqui. */
+export interface ApiChaveCriada extends ApiChave {
+  chave: string;
+}
+
+export interface ApiLog {
+  id: number;
+  api_key_id: number | null;
+  chave: string | null;
+  prefixo: string | null;
+  metodo: string;
+  rota: string;
+  status: number;
+  duracao_ms: number;
+  ip: string | null;
+  created_at: string;
+}
+
+export interface ApiResumo {
+  chamadas_24h: number;
+  erros_24h: number;
+  chaves_ativas: number;
+}
+
+export interface AdminApiChave extends ApiChave {
+  tenant_nome: string;
+}
