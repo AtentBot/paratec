@@ -34,7 +34,7 @@ volumes:
 services:
   # Cérebro dos agentes (FastAPI + LangGraph). PRIVADO (sem Traefik).
   agent-service:
-    image: ${AGENT_IMAGE:-paratec/agent-service:084648f}
+    image: ${AGENT_IMAGE:-paratec/agent-service:addc5ae}
     environment:
       # Postgres operacional
       PGHOST: ${PGHOST}
@@ -95,7 +95,7 @@ services:
 
   # Painel + landing (Next.js). ÚNICO serviço público (via Traefik).
   admin:
-    image: ${ADMIN_IMAGE:-paratec/admin:c69509d}
+    image: ${ADMIN_IMAGE:-paratec/admin:addc5ae}
     environment:
       AGENT_INTERNAL_URL: http://paratec-agent:8000
       NODE_ENV: production
