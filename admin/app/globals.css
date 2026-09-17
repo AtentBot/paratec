@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -33,6 +35,14 @@
   --danger: #dc2626;
   --info: #2563eb;
 
+  /* Palco escuro da landing: a "mesa" onde a janela clara do produto flutua.
+     Fixo nos dois temas — é uma superfície de cena, não segue o tema. */
+  --stage: #0b1220;
+  --stage-fg: #f2f5fb;
+  --stage-muted: #98a3b8;
+  --stage-line: #1d2739;
+  --tick: #1fa97a; /* verde de "lida" — só em status de mensagem */
+
   /* Painel/botão "escuro de destaque" — fixo nos dois temas (não segue --ink,
      que inverte). Usado no card em destaque, botões primários e chips ativos. */
   --feature-bg: #111a2c;
@@ -56,6 +66,9 @@
   --warning: #fbbf24;
   --danger: #f87171;
   --info: #60a5fa;
+
+  --stage: #05080f;
+  --stage-line: #18202e;
 
   /* Levemente elevado/azulado p/ destacar do surface (#111725) no dark. */
   --feature-bg: #1e2942;
@@ -117,4 +130,66 @@ body {
   background:
     radial-gradient(60% 120% at 100% 0%, var(--accent-soft) 0%, transparent 55%),
     linear-gradient(180deg, var(--surface) 0%, var(--surface) 100%);
+}
+
+/* ===========================================================
+ * Site público (landing, preços, login/cadastro)
+ * Tipografia própria: display Bricolage Grotesque (manchete como
+ * elemento gráfico) + Instrument Sans no texto. Fallback do sistema
+ * se a fonte não carregar — nada depende dela para ser legível.
+ * =========================================================== */
+.site {
+  font-family: "Instrument Sans", var(--font-sans);
+
+  /* Cor da marca AtentBot (turquesa do símbolo) no lugar do âmbar herdado
+     do painel. --cta é o fundo dos botões de ação sobre o palco escuro,
+     com texto escuro para manter contraste AA. */
+  --accent: #009da2;
+  --accent-soft: #d5f2f1;
+  --accent-ink: #006a6e;
+  --tick: #009da2;
+  --cta: #46ccc8;
+  --cta-fg: #032a2b;
+}
+.dark .site {
+  --accent: #46ccc8;
+  --accent-soft: #0d3433;
+  --accent-ink: #7fe0dc;
+  --tick: #46ccc8;
+}
+.site-display {
+  font-family: "Bricolage Grotesque", var(--font-sans);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+}
+.site-h1 {
+  font-size: clamp(2.4rem, 5vw, 4rem);
+  line-height: 0.98;
+}
+.site-h2 {
+  font-size: clamp(1.75rem, 3.4vw, 2.6rem);
+}
+
+/* Brilho turquesa atrás da janela do produto, no palco escuro. */
+.stage-glow {
+  /* background-image (não o atalho background) para não apagar a cor do palco */
+  background-image:
+    radial-gradient(80% 90% at 85% 0%, rgba(70, 204, 200, 0.22) 0%, transparent 60%),
+    radial-gradient(60% 80% at 0% 100%, rgba(0, 157, 162, 0.16) 0%, transparent 55%);
+}
+
+/* Entrada em cascata das mensagens: um único momento coreografado,
+   no carregamento. Cada bolha define seu atraso em --d. */
+.msg {
+  opacity: 0;
+  animation: msg-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+  animation-delay: var(--d, 0s);
+}
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg { animation: none; opacity: 1; }
 }

@@ -61,7 +61,7 @@ export default function PrecosPage() {
               className={"flex flex-col rounded-2xl border p-6 shadow-card " + (destaque ? "bg-feature text-feature-fg" : "bg-surface")}
             >
               {destaque && (
-                <span className="mb-3 w-fit rounded-full bg-accent px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-[#3a2500]">
+                <span className="mb-3 w-fit rounded-full bg-cta px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-cta-fg">
                   Mais vendido
                 </span>
               )}
@@ -78,7 +78,7 @@ export default function PrecosPage() {
                 disabled={!p.disponivel || ocupado === p.id}
                 className={
                   "mt-6 rounded-xl px-4 py-2.5 text-center text-sm font-semibold transition disabled:opacity-60 " +
-                  (destaque ? "bg-accent text-[#3a2500] hover:opacity-90" : "bg-feature text-feature-fg hover:opacity-90")
+                  (destaque ? "bg-cta text-cta-fg hover:opacity-90" : "bg-feature text-feature-fg hover:opacity-90")
                 }
               >
                 {ocupado === p.id ? "Redirecionando…" : p.disponivel ? `Assinar ${p.nome}` : "Em breve"}
