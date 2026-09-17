@@ -51,3 +51,7 @@ Thumbs.db
 # Docker / logs
 *.log
 .claude/settings.local.json
+
+# env files da stack (segredos — nunca commitar)
+deploy/atentbot.agent.env
+deploy/atentbot.admin.env

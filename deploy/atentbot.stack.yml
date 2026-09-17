@@ -1,101 +1,48 @@
-# =============================================================================
-# AtentBot — stack de produção (Docker SWARM) — site público + painel + agentes
+# Stack Swarm do AtentBot (SaaS). Fonte de verdade do deploy — mantém as envs
+# de billing/e-mail/metered DURÁVEIS via env_file (os .env NÃO vão pro git).
 #
-# ESTADO ATUAL (2026-09-16): ESTA STACK ESTÁ NO AR. Migrado de serviços Swarm
-# standalone (paratec-admin/paratec-agent) para a stack gerenciada `atentbot`:
-#   docker stack deploy -c atentbot.stack.yml atentbot
-# Serviços: atentbot_admin (público via Traefik) + atentbot_agent-service (privado).
-# Verificado: atentbot.com=200 (landing), /painel=307→/login, /agent/health=ok,
-# /agent/chat=404, paratec.atentbot.com=200. Backup dos specs antigos:
-# /root/atentbot_migracao/*.spec.json (rollback: recriar os service create dali).
+# Deploy:  docker stack deploy -c deploy/atentbot.stack.yml atentbot
+# Requer, ao lado deste arquivo (em /opt/paratec/deploy/, chmod 600, gitignored):
+#   - atentbot.agent.env   (todas as envs do agent: PG*, GOOGLE_API_KEY, EVOLUTION_*,
+#                            VECTOR_*, STRIPE_* (teste), SMTP_*, BILLING_*/PANEL_URL, etc.)
+#   - atentbot.admin.env   (envs do admin: AGENT_INTERNAL_URL etc.)
+# Gerar/atualizar os .env a partir do serviço em execução:
+#   docker service inspect atentbot_agent-service \
+#     --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' \
+#     > deploy/atentbot.agent.env
 #
-# CONTEXTO DO INCIDENTE: a config de roteamento do Traefik para atentbot.com
-# vivia SÓ na stack "atentbot" do Portainer (deletada por engano) e nunca no git
-# — por isso o site caiu em 404. Agora está versionada AQUI. Ver docs/DEPLOY_SAAS.md.
-#
-# VALORES REAIS DA INFRA (Hetzner, node Athena-Evento, Swarm ativo):
-#   rede pública Traefik      : traefik_public  (overlay external)
-#   rede interna admin<->agent: app_network     (overlay external; n8n também está
-#                               nela e chama o agente pelo alias `paratec-agent`)
-#   entrypoint HTTPS          : websecure   |  certresolver ACME: le
-#   volume de mídia           : paratec_agent_media (external)
-#
-# IMAGENS: Swarm NÃO builda de Dockerfile. As imagens são buildadas no nó e
-# tagueadas por commit (paratec/admin:<sha>, paratec/agent-service:<sha>) — SEM
-# registry (single-node, imagem local basta). Para trocar de versão: buildar a
-# nova tag no nó e atualizar ${ADMIN_IMAGE}/${AGENT_IMAGE} (ou docker service
-# update --image). O agent Dockerfile precisa de contexto = RAIZ do repo
-# (`docker build -f agent-service/Dockerfile -t paratec/agent-service:<sha> .`).
-#
-# DEPLOY / ENV: preencher as ${VAR} nas "Environment variables" da stack (Portainer)
-# ou via env exportado antes do `docker stack deploy`. Segredos NÃO vão no git.
-# =============================================================================
+# Redes e volume são EXTERNOS (criados fora desta stack).
 
 version: "3.8"
 
+networks:
+  app_network:
+    external: true
+  traefik_public:
+    external: true
+
+volumes:
+  paratec_agent_media:
+    external: true
+
 services:
-  # Cérebro dos agentes (FastAPI + LangGraph). PRIVADO (sem Traefik).
   agent-service:
-    image: ${AGENT_IMAGE:-paratec/agent-service:latest}
-    environment:
-      # Catálogo / dados (Postgres de produção).
-      PGHOST: ${PGHOST}
-      PGPORT: ${PGPORT:-5432}
-      PGDATABASE: ${PGDATABASE:-paratec}
-      PGUSER: ${PGUSER}
-      PGPASSWORD: ${PGPASSWORD}
-      # RAG / pgvector (serviço paratec-vector).
-      VECTOR_HOST: ${VECTOR_HOST:-paratec-vector}
-      VECTOR_DB: ${VECTOR_DB:-rag}
-      VECTOR_USER: ${VECTOR_USER}
-      VECTOR_PASSWORD: ${VECTOR_PASSWORD}
-      # LLM
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      LLM_MODEL: ${LLM_MODEL:-gemini-flash-latest}
-      # WhatsApp (Evolution)
-      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
-      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
-      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-paratec}
-      # Stripe / billing
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
-      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
-      STRIPE_PRICE_ESSENCIAL: ${STRIPE_PRICE_ESSENCIAL}
-      STRIPE_PRICE_PROFISSIONAL: ${STRIPE_PRICE_PROFISSIONAL}
-      STRIPE_PRICE_ESCALA: ${STRIPE_PRICE_ESCALA}
-      BILLING_SUCCESS_URL: ${BILLING_SUCCESS_URL}
-      BILLING_CANCEL_URL: ${BILLING_CANCEL_URL}
-      PANEL_URL: ${PANEL_URL}
-      # Suporte / e-mail (SMTP da Dew)
-      SUPPORT_EMAIL: ${SUPPORT_EMAIL}
-      SMTP_HOST: ${SMTP_HOST}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_SSL: ${SMTP_SSL:-false}
-      SMTP_USER: ${SMTP_USER}
-      SMTP_PASS: ${SMTP_PASS}
-      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
-      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-AtentBot}
-      SMTP_REPLY_TO: ${SMTP_REPLY_TO}
+    image: paratec/agent-service:90f9e9a
+    env_file:
+      - atentbot.agent.env
     networks:
-      app_network:
-        # n8n/Evolution chamam o agente por este nome — preservar.
-        aliases:
-          - paratec-agent
+      - app_network
     volumes:
       - paratec_agent_media:/app/media
     deploy:
       replicas: 1
       restart_policy:
         condition: any
-      update_config:
-        order: start-first
 
-  # Painel + landing (Next.js standalone). ÚNICO serviço público (via Traefik).
   admin:
-    image: ${ADMIN_IMAGE:-paratec/admin:latest}
-    environment:
-      AGENT_INTERNAL_URL: http://paratec-agent:8000
-      NODE_ENV: production
+    image: paratec/admin:e5cd876
+    env_file:
+      - atentbot.admin.env
     networks:
       - app_network
       - traefik_public
@@ -103,27 +50,11 @@ services:
       replicas: 1
       restart_policy:
         condition: any
-      update_config:
-        order: start-first
-      # No Swarm o provider do Traefik lê os labels do SERVIÇO -> deploy.labels.
       labels:
         - "traefik.enable=true"
         - "traefik.docker.network=traefik_public"
-        - "traefik.http.routers.atentbot.rule=Host(`atentbot.com`) || Host(`paratec.atentbot.com`)"
+        - "traefik.http.routers.atentbot.rule=Host(`atentbot.com`)"
         - "traefik.http.routers.atentbot.entrypoints=websecure"
         - "traefik.http.routers.atentbot.tls=true"
         - "traefik.http.routers.atentbot.tls.certresolver=le"
         - "traefik.http.services.atentbot.loadbalancer.server.port=3000"
-        # Quando app.atentbot.com / www.atentbot.com tiverem DNS apontando p/ o
-        # servidor, inclua-os na rule (ex: || Host(`app.atentbot.com`)); só então
-        # o ACME/le consegue emitir o certificado desses hosts.
-
-networks:
-  traefik_public:
-    external: true
-  app_network:
-    external: true
-
-volumes:
-  paratec_agent_media:
-    external: true
