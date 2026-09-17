@@ -122,3 +122,19 @@ services:
         - "traefik.http.routers.atentbot.tls=true"
         - "traefik.http.routers.atentbot.tls.certresolver=le"
         - "traefik.http.services.atentbot.loadbalancer.server.port=3000"
+        # --- Guardrails de borda ---------------------------------------------
+        # Rate-limit por IP de origem (proteção anti-flood/DDoS de camada 7). O
+        # entrypoint NÃO confia em forwardedHeaders (ver topo), então o IP é o
+        # real. average = req/s sustentado; burst = pico tolerado. Ajuste se o
+        # painel (vários XHR) esbarrar.
+        - "traefik.http.middlewares.atentbot-rl.ratelimit.average=${RL_AVERAGE:-50}"
+        - "traefik.http.middlewares.atentbot-rl.ratelimit.burst=${RL_BURST:-100}"
+        # Cabeçalhos de segurança (clickjacking, MIME-sniffing, HSTS, referrer).
+        # CSP fica de fora de propósito: precisa ser afinada com o Next antes de
+        # ligar (uma CSP errada quebra o painel). HSTS sem includeSubdomains/preload
+        # para não afetar subdomínios http — reveja antes de endurecer.
+        - "traefik.http.middlewares.atentbot-sec.headers.frameDeny=true"
+        - "traefik.http.middlewares.atentbot-sec.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.atentbot-sec.headers.referrerPolicy=strict-origin-when-cross-origin"
+        - "traefik.http.middlewares.atentbot-sec.headers.stsSeconds=31536000"
+        - "traefik.http.routers.atentbot.middlewares=atentbot-rl@docker,atentbot-sec@docker"
