@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     # tenant e retenção (dias) do log de auditoria das chamadas.
     api_max_chaves_por_tenant: int = 20
     api_log_retencao_dias: int = 90
+    # Webhooks de saída. rede_privada=True só p/ desenvolvimento (desliga o
+    # bloqueio anti-SSRF de destinos internos). max_falhas seguidas → desativa.
+    webhook_max_por_tenant: int = 10
+    webhook_max_falhas: int = 15
+    webhook_retencao_dias: int = 30
+    webhook_permitir_rede_privada: bool = False
 
     # SMTP p/ notificações por e-mail (abertura/atualização de chamados). Vazio =
     # desabilitado (chamados ficam só no painel). NÃO commitar SMTP_PASS — use

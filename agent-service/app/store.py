@@ -64,6 +64,7 @@ def upsert_customer(tenant_id: int, telefone: str, **campos) -> dict:
     """Cria/atualiza o cliente com os campos informados (parciais) e recalcula
     o status: 'ativo' quando os 4 campos obrigatórios estão preenchidos."""
     dados = {k: campos.get(k) for k in CAMPOS_CADASTRO}
+    antes = get_customer(tenant_id, telefone)
     execute(
         """
         INSERT INTO customers (tenant_id, telefone, razao_social, cnpj, email, nome_contato)
@@ -89,7 +90,10 @@ def upsert_customer(tenant_id: int, telefone: str, **campos) -> dict:
         """,
         (tenant_id, telefone),
     )
-    return get_customer(tenant_id, telefone)  # type: ignore[return-value]
+    depois = get_customer(tenant_id, telefone)
+    if depois and depois["status"] == "ativo" and (not antes or antes["status"] != "ativo"):
+        _webhook(tenant_id, "cliente.cadastro_completo", depois)
+    return depois  # type: ignore[return-value]
 
 
 def list_customers(tenant_id: int, status: str | None = None, limit: int = 200) -> list[dict]:
@@ -305,6 +309,11 @@ def add_message(
         (content[:160], especialista, role, tenant_id, thread_id),
     )
     _publish(tenant_id, thread_id, {"type": "message", "role": role})
+    if role == "cliente":
+        _webhook(tenant_id, "mensagem.recebida", {"thread_id": thread_id, "autor": role, "texto": content})
+    elif role in ("agente", "humano"):
+        _webhook(tenant_id, "mensagem.enviada",
+                 {"thread_id": thread_id, "autor": role, "texto": content, "especialista": especialista})
 
 
 def marcar_lida(tenant_id: int, thread_id: str) -> dict | None:
@@ -331,10 +340,23 @@ def log_event(
 
 
 def set_status(tenant_id: int, thread_id: str, status: str) -> None:
-    execute(
-        "UPDATE conversations SET status = %s, updated_at = now() WHERE tenant_id = %s AND thread_id = %s",
+    rows = execute(
+        """UPDATE conversations SET status = %s, updated_at = now()
+            WHERE tenant_id = %s AND thread_id = %s
+            RETURNING (SELECT c.status FROM conversations c
+                        WHERE c.tenant_id = conversations.tenant_id
+                          AND c.thread_id = conversations.thread_id) AS anterior""",
         (status, tenant_id, thread_id),
+        returning=True,
     )
+    if rows and rows[0]["anterior"] != status:
+        _webhook_status(tenant_id, thread_id, status)
+
+
+def _webhook_status(tenant_id: int, thread_id: str, status: str) -> None:
+    evento = {"humano": "conversa.transferida_humano", "resolvida": "conversa.resolvida"}.get(status)
+    if evento:
+        _webhook(tenant_id, evento, {"thread_id": thread_id, "status": status})
 
 
 def get_status(tenant_id: int, thread_id: str) -> str | None:
@@ -368,6 +390,7 @@ def set_bot(tenant_id: int, thread_id: str, ativo: bool) -> dict | None:
             (tenant_id, thread_id),
         )
         log_event(tenant_id, "handoff_humano", thread_id=thread_id, meta={"origem": "manual"})
+        _webhook_status(tenant_id, thread_id, "humano")
     return get_conversation(tenant_id, thread_id)
 
 
@@ -389,7 +412,13 @@ def add_queue_item(
         (tenant_id, tipo, thread_id, cliente, telefone, resumo, json.dumps(payload) if payload else None),
         returning=True,
     )
-    return rows[0]["id"]
+    item_id = rows[0]["id"]
+    dados = {"id": item_id, "tipo": tipo, "thread_id": thread_id, "cliente": cliente,
+             "telefone": telefone, "resumo": resumo, "payload": payload or {}}
+    _webhook(tenant_id, "fila.item_criado", dados)
+    if tipo == "pedido":
+        _webhook(tenant_id, "orcamento.criado", dados)
+    return item_id
 
 
 # --- Leitura (endpoints da tela adm) -------------------------------------
@@ -477,6 +506,7 @@ def assumir_conversation(tenant_id: int, thread_id: str) -> dict | None:
         (tenant_id, thread_id),
     )
     log_event(tenant_id, "handoff_humano", thread_id=thread_id, meta={"origem": "manual"})
+    _webhook_status(tenant_id, thread_id, "humano")
     return get_conversation(tenant_id, thread_id)
 
 
@@ -487,6 +517,7 @@ def resolver_conversation(tenant_id: int, thread_id: str) -> dict | None:
         (tenant_id, thread_id),
     )
     log_event(tenant_id, "resolvida", thread_id=thread_id, meta={"origem": "manual"})
+    _webhook_status(tenant_id, thread_id, "resolvida")
     return get_conversation(tenant_id, thread_id)
 
 
@@ -539,6 +570,8 @@ def update_queue_item(
         (status, responsavel, tenant_id, item_id),
         returning=True,
     )
+    if rows:
+        _webhook(tenant_id, "fila.item_atualizado", rows[0])
     return rows[0] if rows else None
 
 
@@ -805,6 +838,16 @@ def metrics_overview(tenant_id: int) -> dict:
 # =========================================================================
 # CONTAS: tenants, usuários, sessões, assinaturas, instâncias
 # =========================================================================
+
+def _webhook(tenant_id: int, evento: str, dados: dict) -> None:
+    """Dispara webhooks de saída do tenant (best-effort, assíncrono)."""
+    try:
+        from . import webhooks
+
+        webhooks.disparar(tenant_id, evento, dados)
+    except Exception:  # pragma: no cover
+        pass
+
 
 def _publish(tenant_id: int, thread_id: str, payload: dict) -> None:
     """Publica evento SSE em canal namespaced por tenant (best-effort)."""
@@ -1627,3 +1670,160 @@ def admin_revoke_api_key(key_id: int) -> dict | None:
         (key_id,), returning=True,
     )
     return rows[0] if rows else None
+
+
+# --- Webhooks de saída ------------------------------------------------------
+# `segredo` só sai por get_webhook_segredo (assinatura/revelação ao owner).
+
+_WEBHOOK_COLS = """id, tenant_id, url, descricao, eventos, ativo, desativado_motivo,
+                   falhas_consecutivas, ultimo_status, ultimo_envio_at, created_by,
+                   created_at, updated_at"""
+
+
+def create_webhook(tenant_id: int, url: str, descricao: str | None, eventos: list[str],
+                   segredo: str, created_by: int | None) -> dict:
+    rows = execute(
+        f"""INSERT INTO webhooks (tenant_id, url, descricao, eventos, segredo, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_WEBHOOK_COLS}""",
+        (tenant_id, url, descricao, eventos, segredo, created_by), returning=True,
+    )
+    return rows[0]
+
+
+def list_webhooks(tenant_id: int) -> list[dict]:
+    return query(
+        f"""SELECT {_WEBHOOK_COLS},
+                   (SELECT count(*) FROM webhook_entregas e
+                     WHERE e.webhook_id = w.id AND e.created_at >= now() - interval '24 hours'
+                   ) AS entregas_24h,
+                   (SELECT count(*) FROM webhook_entregas e
+                     WHERE e.webhook_id = w.id AND NOT e.sucesso
+                       AND e.created_at >= now() - interval '24 hours'
+                   ) AS falhas_24h
+              FROM webhooks w WHERE tenant_id = %s ORDER BY created_at DESC""",
+        (tenant_id,),
+    )
+
+
+def count_webhooks(tenant_id: int) -> int:
+    return int(query("SELECT count(*) AS n FROM webhooks WHERE tenant_id = %s", (tenant_id,))[0]["n"])
+
+
+def get_webhook(tenant_id: int, webhook_id: int) -> dict | None:
+    rows = query(f"SELECT {_WEBHOOK_COLS} FROM webhooks WHERE tenant_id = %s AND id = %s",
+                 (tenant_id, webhook_id))
+    return rows[0] if rows else None
+
+
+def get_webhook_segredo(tenant_id: int, webhook_id: int) -> str | None:
+    rows = query("SELECT segredo FROM webhooks WHERE tenant_id = %s AND id = %s",
+                 (tenant_id, webhook_id))
+    return rows[0]["segredo"] if rows else None
+
+
+def webhooks_do_evento(tenant_id: int, evento: str) -> list[dict]:
+    """Webhooks ATIVOS do tenant assinando o evento (inclui o segredo p/ assinar)."""
+    return query(
+        """SELECT id, tenant_id, url, segredo FROM webhooks
+            WHERE tenant_id = %s AND ativo AND %s = ANY(eventos)""",
+        (tenant_id, evento),
+    )
+
+
+def update_webhook(tenant_id: int, webhook_id: int, *, url: str | None = None,
+                   descricao: str | None = None, eventos: list[str] | None = None,
+                   ativo: bool | None = None) -> dict | None:
+    rows = execute(
+        f"""UPDATE webhooks
+               SET url = COALESCE(%s, url),
+                   descricao = COALESCE(%s, descricao),
+                   eventos = COALESCE(%s, eventos),
+                   ativo = COALESCE(%s::boolean, ativo),
+                   -- reativar manualmente zera o histórico de falhas
+                   falhas_consecutivas = CASE WHEN %s::boolean IS TRUE THEN 0 ELSE falhas_consecutivas END,
+                   desativado_motivo = CASE WHEN %s::boolean IS TRUE THEN NULL ELSE desativado_motivo END,
+                   updated_at = now()
+             WHERE tenant_id = %s AND id = %s
+            RETURNING {_WEBHOOK_COLS}""",
+        (url, descricao, eventos, ativo, ativo, ativo, tenant_id, webhook_id), returning=True,
+    )
+    return rows[0] if rows else None
+
+
+def set_webhook_segredo(tenant_id: int, webhook_id: int, segredo: str) -> bool:
+    rows = execute(
+        "UPDATE webhooks SET segredo = %s, updated_at = now() WHERE tenant_id = %s AND id = %s RETURNING id",
+        (segredo, tenant_id, webhook_id), returning=True,
+    )
+    return bool(rows)
+
+
+def delete_webhook(tenant_id: int, webhook_id: int) -> bool:
+    rows = execute("DELETE FROM webhooks WHERE tenant_id = %s AND id = %s RETURNING id",
+                   (tenant_id, webhook_id), returning=True)
+    return bool(rows)
+
+
+def registrar_entrega_webhook(
+    webhook_id: int, tenant_id: int, evento_id: str, evento: str, payload: dict,
+    sucesso: bool, status_code: int | None, tentativas: int, erro: str | None,
+    duracao_ms: int, max_falhas: int,
+) -> None:
+    """Grava a entrega e atualiza a saúde do webhook; desativa após `max_falhas`
+    falhas seguidas (evita martelar um endpoint fora do ar indefinidamente)."""
+    with get_pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO webhook_entregas (webhook_id, tenant_id, evento_id, evento, payload,
+                                                 sucesso, status_code, tentativas, erro, duracao_ms)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (webhook_id, tenant_id, evento_id, evento, json.dumps(payload, default=str),
+                 sucesso, status_code, tentativas, (erro or None) and erro[:500], duracao_ms),
+            )
+            cur.execute(
+                """UPDATE webhooks
+                      SET ultimo_status = %s, ultimo_envio_at = now(),
+                          falhas_consecutivas = CASE WHEN %s THEN 0 ELSE falhas_consecutivas + 1 END,
+                          ativo = CASE WHEN NOT %s AND falhas_consecutivas + 1 >= %s THEN false ELSE ativo END,
+                          desativado_motivo = CASE WHEN NOT %s AND falhas_consecutivas + 1 >= %s
+                              THEN 'desativado automaticamente após ' || %s::text || ' falhas seguidas'
+                              ELSE desativado_motivo END
+                    WHERE id = %s AND tenant_id = %s""",
+                (status_code, sucesso, sucesso, max_falhas, sucesso, max_falhas, max_falhas,
+                 webhook_id, tenant_id),
+            )
+
+
+def list_entregas_webhook(tenant_id: int, webhook_id: int | None = None, limit: int = 25,
+                          offset: int = 0) -> dict:
+    conds, params = ["tenant_id = %s"], [tenant_id]
+    if webhook_id:
+        conds.append("webhook_id = %s")
+        params.append(webhook_id)
+    where = " AND ".join(conds)
+    total = query(f"SELECT count(*) AS n FROM webhook_entregas WHERE {where}", tuple(params))[0]["n"]
+    items = query(
+        f"""SELECT id, webhook_id, evento_id, evento, payload, sucesso, status_code, tentativas,
+                   erro, duracao_ms, created_at
+              FROM webhook_entregas WHERE {where}
+             ORDER BY created_at DESC LIMIT %s OFFSET %s""",
+        tuple(params + [limit, offset]),
+    )
+    return {"items": items, "total": int(total)}
+
+
+def get_entrega_webhook(tenant_id: int, entrega_id: int) -> dict | None:
+    rows = query(
+        """SELECT id, webhook_id, evento_id, evento, payload FROM webhook_entregas
+            WHERE tenant_id = %s AND id = %s""",
+        (tenant_id, entrega_id),
+    )
+    return rows[0] if rows else None
+
+
+def purge_webhook_entregas(dias: int = 30) -> int:
+    rows = execute(
+        "DELETE FROM webhook_entregas WHERE created_at < now() - make_interval(days => %s) RETURNING id",
+        (dias,), returning=True,
+    )
+    return len(rows or [])

@@ -439,3 +439,49 @@ export interface ApiResumo {
 export interface AdminApiChave extends ApiChave {
   tenant_nome: string;
 }
+
+// --- Webhooks de saída ---
+export interface WebhookEvento {
+  id: string;
+  grupo: string;
+  label: string;
+  descricao: string;
+  exemplo: Record<string, unknown>;
+}
+
+export interface Webhook {
+  id: number;
+  url: string;
+  descricao: string | null;
+  eventos: string[];
+  ativo: boolean;
+  desativado_motivo: string | null;
+  falhas_consecutivas: number;
+  ultimo_status: number | null;
+  ultimo_envio_at: string | null;
+  created_at: string;
+  entregas_24h?: number;
+  falhas_24h?: number;
+}
+
+export interface WebhookEntrega {
+  id: number;
+  webhook_id: number;
+  evento_id: string;
+  evento: string;
+  payload: Record<string, unknown>;
+  sucesso: boolean;
+  status_code: number | null;
+  tentativas: number;
+  erro: string | null;
+  duracao_ms: number;
+  created_at: string;
+}
+
+export interface WebhookResultado {
+  sucesso: boolean;
+  status_code: number | null;
+  erro: string | null;
+  tentativas: number;
+  duracao_ms: number;
+}

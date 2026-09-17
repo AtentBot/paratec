@@ -559,3 +559,42 @@ CREATE TABLE IF NOT EXISTS api_request_log (
 );
 CREATE INDEX IF NOT EXISTS idx_api_log_tenant ON api_request_log(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_api_log_key ON api_request_log(api_key_id, created_at DESC);
+
+-- ===========================================================================
+-- WEBHOOKS DE SAÍDA (eventos da plataforma -> sistema do cliente).
+-- O segredo fica em texto porque é necessário p/ assinar (HMAC) cada entrega.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS webhooks (
+    id                   BIGSERIAL PRIMARY KEY,
+    tenant_id            BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    url                  TEXT NOT NULL,
+    descricao            TEXT,
+    eventos              TEXT[] NOT NULL DEFAULT '{}',
+    segredo              TEXT NOT NULL,
+    ativo                BOOLEAN NOT NULL DEFAULT true,
+    desativado_motivo    TEXT,                 -- preenchido quando o sistema desativa sozinho
+    falhas_consecutivas  INT NOT NULL DEFAULT 0,
+    ultimo_status        INT,
+    ultimo_envio_at      TIMESTAMPTZ,
+    created_by           BIGINT,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id);
+
+CREATE TABLE IF NOT EXISTS webhook_entregas (
+    id           BIGSERIAL PRIMARY KEY,
+    webhook_id   BIGINT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+    tenant_id    BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    evento_id    TEXT NOT NULL,
+    evento       TEXT NOT NULL,
+    payload      JSONB NOT NULL,
+    sucesso      BOOLEAN NOT NULL,
+    status_code  INT,
+    tentativas   INT NOT NULL DEFAULT 1,
+    erro         TEXT,
+    duracao_ms   INT NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_entregas_hook ON webhook_entregas(webhook_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_webhook_entregas_tenant ON webhook_entregas(tenant_id, created_at DESC);

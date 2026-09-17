@@ -29,7 +29,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import api_publica, auth, billing, catalog, evolution, ingest, mailer, realtime, store
+from . import (
+    api_publica, auth, billing, catalog, evolution, ingest, mailer, realtime, store, webhooks,
+)
 from .agents import CAPACIDADES, CAPACIDADES_ORDEM, responder
 from .auth import TenantCtx, current_admin, current_tenant
 from .billing import require_active_subscription
@@ -46,6 +48,7 @@ async def lifespan(_: FastAPI):
         logging.getLogger("atentbot").warning("ensure_schema falhou: %s", e)
     try:
         store.purge_api_logs(settings.api_log_retencao_dias)
+        store.purge_webhook_entregas(settings.webhook_retencao_dias)
     except Exception as e:  # pragma: no cover
         logging.getLogger("atentbot").warning("purge_api_logs falhou: %s", e)
     # Permite publicar eventos SSE a partir de código síncrono (threadpool).
@@ -57,6 +60,7 @@ app = FastAPI(title="AtentBot Agent Service", version="1.0.0", lifespan=lifespan
 
 # API pública de integrações (/v1, chaves por tenant) + gestão das chaves no painel.
 api_publica.instalar(app)
+app.include_router(webhooks.router)
 
 # Diretório dos banners/imagens de promoções (montado em /media). Persistir com
 # um volume Docker em `/app/media` para o histórico manter as miniaturas.

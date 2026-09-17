@@ -35,6 +35,10 @@ import type {
   TicketDetalhe,
   TicketResumo,
   Vendedor,
+  Webhook,
+  WebhookEntrega,
+  WebhookEvento,
+  WebhookResultado,
   WhatsappConfig,
   WhatsappInstancia,
   WhatsappQrCode,
@@ -212,6 +216,22 @@ export const api = {
   apiRevogarChave: (id: number) => sendDetalhe<ApiChave>("DELETE", `/integracoes/chaves/${id}`),
   apiLogs: (p: { chave_id?: number; limit?: number; offset?: number } = {}) =>
     get<{ items: ApiLog[]; total: number }>(`/integracoes/logs?${_qs(p)}`),
+  webhookEventos: () =>
+    get<{ eventos: WebhookEvento[]; max_webhooks: number }>("/integracoes/webhooks/eventos"),
+  webhooks: () => get<Webhook[]>("/integracoes/webhooks"),
+  criarWebhook: (body: { url: string; descricao?: string; eventos: string[] }) =>
+    sendDetalhe<Webhook & { segredo: string }>("POST", "/integracoes/webhooks", body),
+  atualizarWebhook: (id: number, body: { url?: string; descricao?: string; eventos?: string[]; ativo?: boolean }) =>
+    sendDetalhe<Webhook>("PATCH", `/integracoes/webhooks/${id}`, body),
+  removerWebhook: (id: number) => sendDetalhe<{ removido: number }>("DELETE", `/integracoes/webhooks/${id}`),
+  revelarSegredoWebhook: (id: number) => sendDetalhe<{ segredo: string }>("GET", `/integracoes/webhooks/${id}/segredo`),
+  rotacionarSegredoWebhook: (id: number) =>
+    sendDetalhe<{ segredo: string }>("POST", `/integracoes/webhooks/${id}/rotacionar-segredo`),
+  testarWebhook: (id: number) => sendDetalhe<WebhookResultado>("POST", `/integracoes/webhooks/${id}/testar`),
+  entregasWebhook: (p: { webhook_id?: number; limit?: number; offset?: number } = {}) =>
+    get<{ items: WebhookEntrega[]; total: number }>(`/integracoes/webhooks/entregas?${_qs(p)}`),
+  reenviarEntrega: (id: number) =>
+    sendDetalhe<WebhookResultado>("POST", `/integracoes/webhooks/entregas/${id}/reenviar`),
   adminApiChaves: (p: { q?: string; limit?: number; offset?: number } = {}) =>
     get<{ items: AdminApiChave[]; total: number }>(`/admin/integracoes?${_qs(p)}`),
   adminRevogarApiChave: (id: number) =>
