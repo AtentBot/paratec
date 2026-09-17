@@ -1,6 +1,7 @@
 "use client";
 
 import { api } from "@/lib/api";
+import { precoPlano } from "@/lib/format";
 import type { Plano } from "@/lib/types";
 import { Check, Plus } from "lucide-react";
 import Link from "next/link";
@@ -80,7 +81,7 @@ export function PlanosCards() {
             <p className="mt-7 flex items-baseline gap-1.5">
               <span className={"text-sm " + (d ? "text-stage-muted" : "text-muted")}>R$</span>
               <span className={"site-display tnum text-5xl " + (d ? "text-stage-fg" : "text-ink")}>
-                {p ? p.preco.toLocaleString("pt-BR") : <span className="inline-block h-10 w-28 animate-pulse rounded-lg bg-current align-middle opacity-10" />}
+                {p ? precoPlano(p.preco) : <span className="inline-block h-10 w-28 animate-pulse rounded-lg bg-current align-middle opacity-10" />}
               </span>
               <span className={"text-sm " + (d ? "text-stage-muted" : "text-muted")}>por mês</span>
             </p>

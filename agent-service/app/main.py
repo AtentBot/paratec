@@ -201,6 +201,11 @@ class AdminSubReq(BaseModel):
     plan: str | None = None
 
 
+class AdminPlanoPrecoReq(BaseModel):
+    preco: float
+    aplicar_existentes: bool = False
+
+
 class AdminTicketReq(BaseModel):
     status: str | None = None
     prioridade: str | None = None
@@ -450,6 +455,21 @@ def admin_set_sub(tenant_id: int, req: AdminSubReq,
     if not store.get_tenant(tenant_id):
         raise HTTPException(status_code=404, detail="tenant não encontrado")
     return store.admin_set_subscription(tenant_id, req.status, req.plan)
+
+
+@app.get("/admin/planos")
+def admin_planos(admin: TenantCtx = Depends(current_admin)):
+    return billing.planos_admin()
+
+
+@app.patch("/admin/planos/{plano}")
+def admin_plano_preco(plano: str, req: AdminPlanoPrecoReq,
+                      admin: TenantCtx = Depends(current_admin)):
+    if plano not in billing.PLANOS:
+        raise HTTPException(status_code=404, detail="plano não encontrado")
+    if not (0 < req.preco <= 1_000_000):
+        raise HTTPException(status_code=422, detail="preço inválido")
+    return billing.alterar_preco(plano, req.preco, req.aplicar_existentes, admin.email)
 
 
 @app.get("/admin/consumo")

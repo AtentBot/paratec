@@ -3,6 +3,7 @@
 import type {
   AdminConsumoTenant,
   AdminOverview,
+  AdminPlanos,
   AdminTenant,
   AdminTicketDetalhe,
   AdminTicketResumo,
@@ -154,6 +155,9 @@ export const api = {
     get<{ items: AdminTenant[]; total: number }>(`/admin/tenants?${_qs(p)}`),
   adminSetAssinatura: (tenantId: number, body: { status: string; plan?: string }) =>
     send<AssinaturaStatus>("PATCH", `/admin/tenants/${tenantId}/assinatura`, body),
+  adminPlanos: () => get<AdminPlanos>("/admin/planos"),
+  adminAlterarPreco: (plano: string, body: { preco: number; aplicar_existentes: boolean }) =>
+    send<AdminPlanos>("PATCH", `/admin/planos/${plano}`, body),
   adminConsumo: (p: { q?: string; limit?: number; offset?: number } = {}) =>
     get<{ items: AdminConsumoTenant[]; totais: { tenants: number; tokens: number; custo: number } }>(
       `/admin/consumo?${_qs(p)}`,

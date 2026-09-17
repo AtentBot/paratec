@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .db import execute, execute_script, query
+from .db import execute, execute_script, get_pool, query
 
 _HERE = Path(__file__).resolve()
 # Candidatos ao schema em diferentes layouts (repo em dev, /app/db no container).
@@ -1222,6 +1222,96 @@ def admin_count_tenants(q: str | None = None) -> int:
 def admin_set_subscription(tenant_id: int, status: str, plan: str | None = None) -> dict:
     """Override manual da assinatura (comp/suspensão). Mantém o restante."""
     return upsert_subscription(tenant_id, status=status, plan=plan)
+
+
+# --- Planos (preço base parametrizável) -----------------------------------
+
+_PLAN_COLS = """id, nome, preco::float AS preco, descricao, ordem, stripe_product_id,
+                stripe_price_id, updated_by, updated_at"""
+
+
+def list_plans() -> list[dict]:
+    return query(f"SELECT {_PLAN_COLS} FROM plans ORDER BY ordem, id")
+
+
+def get_plan(plan_id: str) -> dict | None:
+    rows = query(f"SELECT {_PLAN_COLS} FROM plans WHERE id = %s", (plan_id,))
+    return rows[0] if rows else None
+
+
+def plan_by_price_id(price_id: str) -> str | None:
+    """Plano de um price id do Stripe: o vigente ou qualquer um do histórico."""
+    rows = query(
+        """SELECT id FROM plans WHERE stripe_price_id = %s
+           UNION
+           SELECT plan_id FROM plan_price_history
+            WHERE stripe_price_id_novo = %s OR stripe_price_id_anterior = %s
+           LIMIT 1""",
+        (price_id, price_id, price_id),
+    )
+    return rows[0]["id"] if rows else None
+
+
+def update_plan_price(plan_id: str, preco: float, *, stripe_price_id: str | None,
+                      stripe_product_id: str | None, preco_anterior: float | None,
+                      stripe_price_id_anterior: str | None, migradas: int, falhas: int,
+                      alterado_por: str | None) -> dict | None:
+    """Grava o novo preço vigente + a linha de histórico (mesma transação)."""
+    with get_pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE plans SET preco = %s,
+                       stripe_price_id   = COALESCE(%s, stripe_price_id),
+                       stripe_product_id = COALESCE(%s, stripe_product_id),
+                       updated_by = %s, updated_at = now()
+                 WHERE id = %s""",
+                (preco, stripe_price_id, stripe_product_id, alterado_por, plan_id),
+            )
+            cur.execute(
+                """INSERT INTO plan_price_history
+                     (plan_id, preco_anterior, preco_novo, stripe_price_id_anterior,
+                      stripe_price_id_novo, assinaturas_migradas, assinaturas_falhas, alterado_por)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (plan_id, preco_anterior, preco, stripe_price_id_anterior, stripe_price_id,
+                 migradas, falhas, alterado_por),
+            )
+    return get_plan(plan_id)
+
+
+def plan_price_history(plan_id: str | None = None, limit: int = 20) -> list[dict]:
+    where, params = "", []
+    if plan_id:
+        where = "WHERE plan_id = %s"
+        params.append(plan_id)
+    return query(
+        f"""SELECT id, plan_id, preco_anterior::float AS preco_anterior,
+                   preco_novo::float AS preco_novo, stripe_price_id_novo,
+                   assinaturas_migradas, assinaturas_falhas, alterado_por, created_at
+              FROM plan_price_history {where}
+             ORDER BY created_at DESC LIMIT %s""",
+        (*params, limit),
+    )
+
+
+def assinaturas_do_plano(plan_id: str) -> list[dict]:
+    """Assinaturas Stripe vivas de um plano (candidatas a migrar de preço)."""
+    return query(
+        """SELECT tenant_id, stripe_subscription_id, stripe_price_id, status
+             FROM subscriptions
+            WHERE plan = %s AND stripe_subscription_id IS NOT NULL
+              AND status IN ('active','trialing','past_due','unpaid')""",
+        (plan_id,),
+    )
+
+
+def contagem_assinantes_por_plano() -> dict[str, int]:
+    rows = query(
+        """SELECT plan, count(*) AS n FROM subscriptions
+            WHERE plan IS NOT NULL AND stripe_subscription_id IS NOT NULL
+              AND status IN ('active','trialing','past_due','unpaid')
+            GROUP BY plan"""
+    )
+    return {r["plan"]: int(r["n"]) for r in rows}
 
 
 def _ticket_filtros(status, prioridade, q) -> tuple[str, list]:

@@ -317,6 +317,42 @@ export interface AdminTenant {
   usuarios: number;
 }
 
+export interface AdminPlano {
+  id: string;
+  nome: string;
+  preco: number;
+  descricao: string;
+  stripe_price_id: string | null;
+  assinantes: number;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface AdminPlanoHistorico {
+  id: number;
+  plan_id: string;
+  preco_anterior: number | null;
+  preco_novo: number;
+  stripe_price_id_novo: string | null;
+  assinaturas_migradas: number;
+  assinaturas_falhas: number;
+  alterado_por: string | null;
+  created_at: string;
+}
+
+export interface AdminPlanos {
+  items: AdminPlano[];
+  historico: AdminPlanoHistorico[];
+  stripe_configurado: boolean;
+  resultado?: {
+    plano: string;
+    preco: number;
+    stripe_price_id: string | null;
+    assinaturas_migradas: number;
+    assinaturas_falhas: number;
+  };
+}
+
 export interface AdminTicketResumo {
   id: number;
   assunto: string;

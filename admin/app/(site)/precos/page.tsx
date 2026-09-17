@@ -1,24 +1,21 @@
 "use client";
 
 import { api } from "@/lib/api";
+import { precoPlano } from "@/lib/format";
 import type { Plano } from "@/lib/types";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-const FALLBACK: Plano[] = [
-  { id: "essencial", nome: "Essencial", preco: 690, descricao: "1 número · 1 agente · catálogo até 500 SKUs · 3 usuários.", disponivel: true },
-  { id: "profissional", nome: "Profissional", preco: 1690, descricao: "Até 3 números · multi-agente · equipe · broadcast · 8 usuários.", disponivel: true },
-  { id: "escala", nome: "Escala", preco: 3900, descricao: "Números ilimitados · WhatsApp API oficial · ERP · SLA.", disponivel: true },
-];
-
 export default function PrecosPage() {
   const router = useRouter();
-  const [planos, setPlanos] = useState<Plano[]>(FALLBACK);
+  const [planos, setPlanos] = useState<Plano[] | null>(null);
+  const [falhou, setFalhou] = useState(false);
   const [ocupado, setOcupado] = useState<string | null>(null);
 
   useEffect(() => {
-    api.planos().then((p) => p?.length && setPlanos(p)).catch(() => {});
+    // Preço vem sempre da API (parametrizado na central admin).
+    api.planos().then(setPlanos).catch(() => setFalhou(true));
   }, []);
 
   async function assinar(id: string) {
@@ -52,8 +49,13 @@ export default function PrecosPage() {
         </p>
       </div>
 
+      {!planos && (
+        <p className="mt-10 text-center text-sm text-muted">
+          {falhou ? "Não foi possível carregar os planos agora. Tente novamente em instantes." : "Carregando planos…"}
+        </p>
+      )}
       <div className="mt-10 grid gap-5 md:grid-cols-3">
-        {planos.map((p) => {
+        {planos?.map((p) => {
           const destaque = p.id === "profissional";
           return (
             <div
@@ -69,7 +71,7 @@ export default function PrecosPage() {
               <p className={"mt-1 text-sm " + (destaque ? "text-white/70" : "text-muted")}>{p.descricao}</p>
               <div className="mt-5 flex items-end gap-1">
                 <span className={"text-4xl font-bold " + (destaque ? "text-feature-fg" : "text-ink")}>
-                  R$ {p.preco.toLocaleString("pt-BR")}
+                  R$ {precoPlano(p.preco)}
                 </span>
                 <span className={"pb-1 text-sm " + (destaque ? "text-white/70" : "text-muted")}>/mês</span>
               </div>

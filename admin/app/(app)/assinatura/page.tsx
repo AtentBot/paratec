@@ -1,6 +1,7 @@
 "use client";
 
 import { api } from "@/lib/api";
+import { precoPlano } from "@/lib/format";
 import type { AssinaturaStatus, Plano, Uso } from "@/lib/types";
 import { CheckCircle2, AlertTriangle, Loader2, Gauge, X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -200,7 +201,7 @@ export default function AssinaturaPage() {
                 <div key={p.id} className={"flex flex-col rounded-2xl border p-5 shadow-card " + (destaque ? "bg-feature text-feature-fg" : "bg-surface")}>
                   <h4 className={"text-base font-semibold " + (destaque ? "text-feature-fg" : "text-ink")}>{p.nome}</h4>
                   <p className={"mt-1 text-xs " + (destaque ? "text-white/70" : "text-muted")}>{p.descricao}</p>
-                  <div className="mt-4 text-2xl font-bold">R$ {p.preco.toLocaleString("pt-BR")}<span className={"text-sm font-normal " + (destaque ? "text-white/70" : "text-muted")}>/mês</span></div>
+                  <div className="mt-4 text-2xl font-bold">R$ {precoPlano(p.preco)}<span className={"text-sm font-normal " + (destaque ? "text-white/70" : "text-muted")}>/mês</span></div>
                   <button
                     onClick={() => assinar(p.id)} disabled={ocupado || !p.disponivel}
                     className={"mt-4 rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-60 " + (destaque ? "bg-accent text-[#3a2500] hover:opacity-90" : "bg-feature text-feature-fg hover:opacity-90")}

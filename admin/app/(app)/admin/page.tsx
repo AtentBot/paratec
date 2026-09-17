@@ -4,7 +4,7 @@ import { StatCard } from "@/components/stat-card";
 import { Restrito } from "@/components/restrito";
 import { api } from "@/lib/api";
 import type { AdminOverview } from "@/lib/types";
-import { Building2, CheckCircle2, Gauge, LifeBuoy, Loader2 } from "lucide-react";
+import { Building2, CheckCircle2, Gauge, LifeBuoy, Loader2, Tags } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -30,7 +30,7 @@ export default function AdminHome() {
         <StatCard label="Consumo do mês" value={brl(o.consumo_mes)} icon={<Gauge size={18} />} hint="todos os clientes" />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Link href="/admin/chamados" className="rounded-2xl border bg-surface p-5 shadow-card transition hover:-translate-y-0.5 hover:shadow-lift">
           <LifeBuoy size={20} className="text-accent-ink" />
           <p className="mt-3 text-sm font-semibold text-ink">Chamados</p>
@@ -40,6 +40,11 @@ export default function AdminHome() {
           <CheckCircle2 size={20} className="text-accent-ink" />
           <p className="mt-3 text-sm font-semibold text-ink">Assinaturas</p>
           <p className="text-xs text-muted">Planos e status por cliente; ajustes manuais.</p>
+        </Link>
+        <Link href="/admin/planos" className="rounded-2xl border bg-surface p-5 shadow-card transition hover:-translate-y-0.5 hover:shadow-lift">
+          <Tags size={20} className="text-accent-ink" />
+          <p className="mt-3 text-sm font-semibold text-ink">Planos e preços</p>
+          <p className="text-xs text-muted">Preço base de cada plano, aplicado ao Stripe e ao site.</p>
         </Link>
         <Link href="/admin/consumo" className="rounded-2xl border bg-surface p-5 shadow-card transition hover:-translate-y-0.5 hover:shadow-lift">
           <Gauge size={20} className="text-accent-ink" />

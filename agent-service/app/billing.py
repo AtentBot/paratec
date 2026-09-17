@@ -23,7 +23,8 @@ from .settings import settings
 
 log = logging.getLogger("atentbot.billing")
 
-# Catálogo de planos exibido na tela (valores do plano de negócios).
+# Catálogo padrão dos planos. A fonte de verdade do PREÇO é a tabela `plans`
+# (editável na central admin); isto é só fallback se o banco estiver fora.
 PLANOS = {
     "essencial": {
         "nome": "Essencial", "preco": 690,
@@ -149,12 +150,36 @@ def status(tenant_id: int) -> dict:
     }
 
 
+def _planos_db() -> list[dict]:
+    try:
+        rows = store.list_plans()
+    except Exception as e:  # pragma: no cover
+        log.warning("list_plans falhou, usando catálogo padrão: %s", e)
+        rows = []
+    if not rows:
+        return [{"id": pid, **meta, "stripe_price_id": None} for pid, meta in PLANOS.items()]
+    return rows
+
+
+def price_id_do_plano(plano: str, plano_db: dict | None = None) -> str | None:
+    """Price id vigente: o gravado pelo admin (tabela plans) ou a env STRIPE_PRICE_*."""
+    if plano_db is None:
+        try:
+            plano_db = store.get_plan(plano)
+        except Exception:  # pragma: no cover
+            plano_db = None
+    return (plano_db or {}).get("stripe_price_id") or settings.plan_prices.get(plano)
+
+
 def planos() -> list[dict]:
-    """Planos disponíveis (só os que têm price id configurado no Stripe)."""
-    disponiveis = settings.plan_prices
+    """Planos com o preço vigente (só 'disponivel' os que têm price id no Stripe)."""
     return [
-        {"id": pid, **meta, "disponivel": pid in disponiveis}
-        for pid, meta in PLANOS.items()
+        {
+            "id": p["id"], "nome": p["nome"], "preco": float(p["preco"]),
+            "descricao": p.get("descricao") or "",
+            "disponivel": bool(price_id_do_plano(p["id"], p)),
+        }
+        for p in _planos_db()
     ]
 
 
@@ -194,7 +219,7 @@ def uso(tenant_id: int) -> dict:
 def criar_checkout(tenant: TenantCtx, plano: str) -> str:
     """Cria a Checkout Session (assinatura, SEM trial) e devolve a URL."""
     stripe = _init_stripe()
-    price_id = settings.plan_prices.get(plano)
+    price_id = price_id_do_plano(plano) if plano in PLANOS else None
     if not price_id:
         raise HTTPException(400, "plano inválido ou indisponível")
 
@@ -260,10 +285,132 @@ def reativar(tenant_id: int) -> dict:
     return status(tenant_id)
 
 
+# --- Preço base dos planos (central admin) -----------------------------
+
+def planos_admin() -> dict:
+    """Planos com dados de Stripe, nº de assinantes e histórico de preços."""
+    try:
+        contagem = store.contagem_assinantes_por_plano()
+        historico = store.plan_price_history(limit=30)
+    except Exception:  # pragma: no cover
+        contagem, historico = {}, []
+    itens = [
+        {
+            **p,
+            "preco": float(p["preco"]),
+            "stripe_price_id": price_id_do_plano(p["id"], p),
+            "assinantes": contagem.get(p["id"], 0),
+        }
+        for p in _planos_db()
+    ]
+    return {"items": itens, "historico": historico,
+            "stripe_configurado": settings.stripe_configured}
+
+
+def alterar_preco(plano: str, preco: float, aplicar_existentes: bool,
+                  alterado_por: str | None) -> dict:
+    """Altera o preço base de um plano em toda a cadeia de cobrança.
+
+    Preço no Stripe é imutável, então: cria um Price novo no mesmo produto
+    (herdando moeda/recorrência e o lookup_key), arquiva o anterior e grava o
+    novo como vigente → próximos checkouts já usam o valor novo. Com
+    `aplicar_existentes`, troca o item do plano nas assinaturas vivas SEM
+    proração (o valor novo vale a partir da próxima fatura). Sem Stripe
+    configurado, só atualiza o valor exibido."""
+    atual = store.get_plan(plano)
+    if not atual:
+        raise HTTPException(404, "plano não encontrado")
+    centavos = int(round(preco * 100))
+    if centavos <= 0:
+        raise HTTPException(422, "preço deve ser maior que zero")
+    preco = centavos / 100
+
+    price_antigo = price_id_do_plano(plano, atual)
+    novo_price_id, product_id = None, atual.get("stripe_product_id")
+    migradas = falhas = 0
+
+    if settings.stripe_configured:
+        stripe = _init_stripe()
+        try:
+            recurring = {"interval": "month"}
+            moeda = "brl"
+            lookup_key = f"atentbot_{plano}_mensal"
+            if price_antigo:
+                antigo = stripe.Price.retrieve(price_antigo)
+                product_id = antigo["product"]
+                moeda = antigo["currency"]
+                rec = antigo.get("recurring") or {}
+                recurring = {"interval": rec.get("interval", "month"),
+                             "interval_count": rec.get("interval_count", 1)}
+                lookup_key = antigo.get("lookup_key") or lookup_key
+            if not product_id:
+                prod = stripe.Product.create(name=f"AtentBot {atual['nome']}",
+                                             metadata={"plan": plano})
+                product_id = prod["id"]
+            novo = stripe.Price.create(
+                product=product_id, currency=moeda, unit_amount=centavos,
+                recurring=recurring, lookup_key=lookup_key, transfer_lookup_key=True,
+                metadata={"plan": plano},
+            )
+            novo_price_id = novo["id"]
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.error("criar price do plano %s falhou: %s", plano, e)
+            raise HTTPException(502, f"Stripe recusou o novo preço: {e}")
+
+        if aplicar_existentes:
+            for sub in store.assinaturas_do_plano(plano):
+                try:
+                    full = stripe.Subscription.retrieve(sub["stripe_subscription_id"])
+                    item = next(
+                        (it for it in full["items"]["data"]
+                         if _plan_do_price(it["price"]["id"]) == plano), None)
+                    if not item:
+                        falhas += 1
+                        continue
+                    if item["price"]["id"] != novo_price_id:
+                        stripe.Subscription.modify(
+                            full["id"],
+                            items=[{"id": item["id"], "price": novo_price_id}],
+                            proration_behavior="none",
+                        )
+                    store.upsert_subscription(sub["tenant_id"], stripe_price_id=novo_price_id)
+                    migradas += 1
+                except Exception as e:
+                    falhas += 1
+                    log.warning("migrar assinatura %s p/ novo preço falhou: %s",
+                                sub["stripe_subscription_id"], e)
+
+        # Arquiva o preço antigo só depois de migrar (assinaturas que ficaram
+        # nele continuam sendo cobradas normalmente; só some de novos checkouts).
+        if price_antigo and price_antigo != novo_price_id:
+            try:
+                stripe.Price.modify(price_antigo, active=False)
+            except Exception as e:  # pragma: no cover
+                log.warning("arquivar price %s falhou: %s", price_antigo, e)
+
+    store.update_plan_price(
+        plano, preco, stripe_price_id=novo_price_id, stripe_product_id=product_id,
+        preco_anterior=float(atual["preco"]), stripe_price_id_anterior=price_antigo,
+        migradas=migradas, falhas=falhas, alterado_por=alterado_por,
+    )
+    return {**planos_admin(), "resultado": {
+        "plano": plano, "preco": preco, "stripe_price_id": novo_price_id,
+        "assinaturas_migradas": migradas, "assinaturas_falhas": falhas,
+    }}
+
+
 # --- Webhook --------------------------------------------------------------
 
 def _plan_do_price(price_id: str | None) -> str | None:
-    return settings.price_to_plan.get(price_id) if price_id else None
+    if not price_id:
+        return None
+    try:
+        plano = store.plan_by_price_id(price_id)
+    except Exception:  # pragma: no cover
+        plano = None
+    return plano or settings.price_to_plan.get(price_id)
 
 
 def _sync_subscription(sub_obj: dict) -> None:
@@ -278,12 +425,21 @@ def _sync_subscription(sub_obj: dict) -> None:
         log.warning("webhook: assinatura sem tenant resolvível (customer=%s)", customer_id)
         return
     items = (sub_obj.get("items") or {}).get("data") or []
-    price_id = items[0]["price"]["id"] if items else None
+    # O item do plano base é o que mapeia p/ um plano (os demais são metered).
+    price_id, plano = None, None
+    for it in items:
+        pid = it["price"]["id"]
+        plano = _plan_do_price(pid)
+        if plano:
+            price_id = pid
+            break
+    if not price_id and items:
+        price_id = items[0]["price"]["id"]
     store.upsert_subscription(
         tenant_id,
         stripe_subscription_id=sub_obj.get("id"),
         stripe_customer_id=customer_id,
-        plan=_plan_do_price(price_id),
+        plan=plano,
         stripe_price_id=price_id,
         status=sub_obj.get("status"),
         cancel_at_period_end=bool(sub_obj.get("cancel_at_period_end")),

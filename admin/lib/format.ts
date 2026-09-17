@@ -40,3 +40,12 @@ export const especialistaLabel: Record<string, string> = {
   entrega: "Entrega",
   boletos: "Boletos",
 };
+
+/** Preço de plano sem "R$" ("1.690" ou "690,50" — centavos só quando houver). */
+export function precoPlano(v: number): string {
+  const inteiro = Math.round(v * 100) % 100 === 0;
+  return v.toLocaleString("pt-BR", {
+    minimumFractionDigits: inteiro ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+}

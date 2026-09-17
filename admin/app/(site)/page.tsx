@@ -5,11 +5,6 @@ import {
 } from "lucide-react";
 import { ConversaDemo, PainelDemo } from "./_components/mockups";
 import { PlanosCards } from "./_components/planos";
-import { api } from "@/lib/api";
-import { precoPlano } from "@/lib/format";
-
-// O preço dos planos é parametrizado na central admin: renderiza a cada acesso.
-export const dynamic = "force-dynamic";
 
 // Passos reais de ativação — é uma sequência, por isso a numeração.
 const PASSOS = [
@@ -91,17 +86,7 @@ const PERGUNTAS = [
   },
 ];
 
-async function precosVigentes(): Promise<Record<string, number>> {
-  try {
-    const planos = await api.planos();
-    return Object.fromEntries(planos.map((p) => [p.id, p.preco]));
-  } catch {
-    return {};
-  }
-}
-
-export default async function Landing() {
-  const precos = await precosVigentes();
+export default function Landing() {
   return (
     <main>
       {/* ---------- Hero ---------- */}

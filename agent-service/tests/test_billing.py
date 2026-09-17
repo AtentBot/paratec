@@ -88,3 +88,128 @@ def test_usage_registro_e_resumo(db, tid):
     assert r["eventos"] == 2
     assert {t["tipo"] for t in r["por_tipo"]} == {"chat", "rag_ingest_documento"}
     assert len(db.usage_recentes(tid)) == 2
+
+
+# --- Preço base parametrizável (central admin) ------------------------------
+
+class _FakeStripe:
+    """Stripe mínimo p/ alterar_preco: registra as chamadas."""
+
+    def __init__(self, sub_items):
+        fake = self
+        self.calls = []
+
+        class Price:
+            @staticmethod
+            def retrieve(pid):
+                return {"id": pid, "product": "prod_1", "currency": "brl",
+                        "recurring": {"interval": "month", "interval_count": 1},
+                        "lookup_key": "atentbot_essencial_mensal"}
+
+            @staticmethod
+            def create(**kw):
+                fake.calls.append(("price.create", kw))
+                return {"id": "price_novo"}
+
+            @staticmethod
+            def modify(pid, **kw):
+                fake.calls.append(("price.modify", pid, kw))
+
+        class Subscription:
+            @staticmethod
+            def retrieve(sid):
+                return {"id": sid, "items": {"data": sub_items}}
+
+            @staticmethod
+            def modify(sid, **kw):
+                fake.calls.append(("sub.modify", sid, kw))
+
+        self.Price, self.Subscription = Price, Subscription
+
+
+def _setup_alterar(monkeypatch, sub_items, subs):
+    fake = _FakeStripe(sub_items)
+    gravado = {}
+    monkeypatch.setattr(settings, "stripe_secret_key", "sk_test", raising=False)
+    monkeypatch.setattr(billing, "_init_stripe", lambda: fake)
+    monkeypatch.setattr(store, "get_plan", lambda p: {
+        "id": p, "nome": "Essencial", "preco": 690.0, "stripe_price_id": "price_velho",
+        "stripe_product_id": None})
+    monkeypatch.setattr(store, "plan_by_price_id",
+                        lambda pid: "essencial" if pid in ("price_velho", "price_novo") else None)
+    monkeypatch.setattr(store, "assinaturas_do_plano", lambda p: subs)
+    monkeypatch.setattr(store, "upsert_subscription", lambda *a, **k: None)
+    monkeypatch.setattr(store, "update_plan_price",
+                        lambda plano, preco, **kw: gravado.update(plano=plano, preco=preco, **kw))
+    monkeypatch.setattr(billing, "planos_admin", lambda: {"items": []})
+    return fake, gravado
+
+
+def test_alterar_preco_so_novos_checkouts(monkeypatch):
+    fake, gravado = _setup_alterar(monkeypatch, [], [{"tenant_id": 5, "stripe_subscription_id": "sub_1"}])
+    r = billing.alterar_preco("essencial", 790.5, False, "staff@dew")
+
+    criado = [c for c in fake.calls if c[0] == "price.create"][0][1]
+    assert criado["unit_amount"] == 79050 and criado["product"] == "prod_1"
+    assert criado["transfer_lookup_key"] is True
+    assert ("price.modify", "price_velho", {"active": False}) in fake.calls
+    assert not any(c[0] == "sub.modify" for c in fake.calls)  # assinantes intocados
+    assert gravado["stripe_price_id"] == "price_novo" and gravado["preco"] == 790.5
+    assert gravado["stripe_price_id_anterior"] == "price_velho"
+    assert r["resultado"]["assinaturas_migradas"] == 0
+
+
+def test_alterar_preco_migra_existentes_sem_proracao(monkeypatch):
+    items = [{"id": "si_meter", "price": {"id": "price_meter"}},
+             {"id": "si_base", "price": {"id": "price_velho"}}]
+    fake, gravado = _setup_alterar(monkeypatch, items, [{"tenant_id": 5, "stripe_subscription_id": "sub_1"}])
+    r = billing.alterar_preco("essencial", 790, True, "staff@dew")
+
+    mods = [c for c in fake.calls if c[0] == "sub.modify"]
+    assert mods == [("sub.modify", "sub_1", {
+        "items": [{"id": "si_base", "price": "price_novo"}], "proration_behavior": "none"})]
+    assert r["resultado"]["assinaturas_migradas"] == 1 and gravado["migradas"] == 1
+
+
+def test_alterar_preco_rejeita_zero(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    _setup_alterar(monkeypatch, [], [])
+    with pytest.raises(HTTPException):
+        billing.alterar_preco("essencial", 0, False, None)
+
+
+def test_sync_subscription_usa_item_do_plano(monkeypatch):
+    capt = {}
+    monkeypatch.setattr(store, "get_subscription_tenant_by_customer", lambda c: 7)
+    monkeypatch.setattr(store, "plan_by_price_id",
+                        lambda pid: "escala" if pid == "price_escala_novo" else None)
+    monkeypatch.setattr(store, "upsert_subscription", lambda t, **kw: capt.update(kw))
+    billing._sync_subscription({
+        "id": "sub_1", "customer": "cus_1", "status": "active",
+        "items": {"data": [{"price": {"id": "price_meter"}},
+                           {"price": {"id": "price_escala_novo"}}]},
+    })
+    assert capt["plan"] == "escala" and capt["stripe_price_id"] == "price_escala_novo"
+
+
+@requires_db
+def test_plans_store_e_historico():
+    store.execute("DELETE FROM plan_price_history")
+    store.execute("UPDATE plans SET preco = 690, stripe_price_id = NULL WHERE id = 'essencial'")
+    assert [p["id"] for p in store.list_plans()] == ["essencial", "profissional", "escala"]
+    p = store.update_plan_price(
+        "essencial", 790.5, stripe_price_id="price_novo", stripe_product_id="prod_1",
+        preco_anterior=690, stripe_price_id_anterior="price_velho",
+        migradas=2, falhas=0, alterado_por="staff@dew")
+    assert p["preco"] == 790.5 and p["stripe_price_id"] == "price_novo"
+    assert store.plan_by_price_id("price_novo") == "essencial"
+    assert store.plan_by_price_id("price_velho") == "essencial"   # antigo, via histórico
+    assert store.plan_by_price_id("price_x") is None
+    h = store.plan_price_history("essencial")
+    assert h[0]["preco_anterior"] == 690 and h[0]["assinaturas_migradas"] == 2
+    # a vitrine pública reflete o preço novo
+    assert {x["id"]: x["preco"] for x in billing.planos()}["essencial"] == 790.5
+    store.execute("DELETE FROM plan_price_history")
+    store.execute("UPDATE plans SET preco = 690, stripe_price_id = NULL WHERE id = 'essencial'")

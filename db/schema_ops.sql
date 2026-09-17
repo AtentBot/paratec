@@ -481,3 +481,42 @@ BEGIN
         PERFORM setval('catalog_product_id_seq', GREATEST(100000000, mx + 1), false);
     END IF;
 END $$;
+
+-- ===========================================================================
+-- PLANOS PARAMETRIZÁVEIS (preço base editável na central admin).
+-- O preço vigente e o price id do Stripe ficam aqui; as envs STRIPE_PRICE_*
+-- viram só fallback enquanto o plano ainda não foi editado pelo admin.
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS plans (
+    id                TEXT PRIMARY KEY CHECK (id IN ('essencial','profissional','escala')),
+    nome              TEXT NOT NULL,
+    preco             NUMERIC(10,2) NOT NULL CHECK (preco > 0),
+    descricao         TEXT,
+    ordem             INT NOT NULL DEFAULT 0,
+    stripe_product_id TEXT,
+    stripe_price_id   TEXT,              -- NULL = usa a env STRIPE_PRICE_<PLANO>
+    updated_by        TEXT,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO plans (id, nome, preco, descricao, ordem) VALUES
+    ('essencial',    'Essencial',    690,  '1 número · 1 agente · catálogo até 500 SKUs · 3 usuários.', 1),
+    ('profissional', 'Profissional', 1690, 'Até 3 números · multi-agente · equipe · broadcast · 8 usuários.', 2),
+    ('escala',       'Escala',       3900, 'Números ilimitados · WhatsApp API oficial · ERP · SLA.', 3)
+ON CONFLICT (id) DO NOTHING;
+
+-- Histórico de alterações de preço (auditoria + mapeia price ids antigos ao plano,
+-- p/ o webhook reconhecer assinaturas que ficaram no preço anterior).
+CREATE TABLE IF NOT EXISTS plan_price_history (
+    id                       BIGSERIAL PRIMARY KEY,
+    plan_id                  TEXT NOT NULL REFERENCES plans(id),
+    preco_anterior           NUMERIC(10,2),
+    preco_novo               NUMERIC(10,2) NOT NULL,
+    stripe_price_id_anterior TEXT,
+    stripe_price_id_novo     TEXT,
+    assinaturas_migradas     INT NOT NULL DEFAULT 0,
+    assinaturas_falhas       INT NOT NULL DEFAULT 0,
+    alterado_por             TEXT,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_plan_price_history_plan ON plan_price_history(plan_id, created_at DESC);

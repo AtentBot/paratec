@@ -17,6 +17,12 @@ serviços → 6) remover Authentik → 7) verificação**.
    - Profissional — R$ 1.690/mês
    - Escala — R$ 3.900/mês
    > NÃO configure trial no preço (o checkout é sem trial por design).
+   > Esses são só os preços iniciais. Depois do go-live, **altere o preço pela
+   > central admin → Planos e preços** (`/admin/planos`), nunca direto no Stripe:
+   > o sistema cria o novo Price (mesmo produto e lookup_key), arquiva o antigo,
+   > grava o price vigente na tabela `plans` (as envs `STRIPE_PRICE_*` ficam só
+   > como fallback) e, se você marcar a opção, migra as assinaturas atuais sem
+   > proração. O site (landing, /precos) e o painel leem o valor da API.
 2. **Chaves** (Developers → API keys): copie a **Secret key** (`sk_...`) e a
    **Publishable key** (`pk_...`).
 3. **Webhook** (Developers → Webhooks → Add endpoint):

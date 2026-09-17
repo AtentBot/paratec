@@ -21,6 +21,7 @@ import {
   LifeBuoy,
   ShieldCheck,
   Gauge,
+  Tags,
   LogOut,
   Zap,
 } from "lucide-react";
@@ -61,6 +62,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin", label: "Visão geral", icon: ShieldCheck },
   { href: "/admin/chamados", label: "Chamados", icon: LifeBuoy },
   { href: "/admin/assinaturas", label: "Assinaturas", icon: CreditCard },
+  { href: "/admin/planos", label: "Planos e preços", icon: Tags },
   { href: "/admin/consumo", label: "Consumo", icon: Gauge },
 ];
 
