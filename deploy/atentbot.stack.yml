@@ -1,17 +1,23 @@
-# Stack Swarm do AtentBot (SaaS). Fonte de verdade do deploy — mantém as envs
-# de billing/e-mail/metered DURÁVEIS via env_file (os .env NÃO vão pro git).
+# =============================================================================
+# AtentBot — stack de produção (Docker SWARM) para GIT-STACK no Portainer.
 #
-# Deploy:  docker stack deploy -c deploy/atentbot.stack.yml atentbot
-# Requer, ao lado deste arquivo (em /opt/paratec/deploy/, chmod 600, gitignored):
-#   - atentbot.agent.env   (todas as envs do agent: PG*, GOOGLE_API_KEY, EVOLUTION_*,
-#                            VECTOR_*, STRIPE_* (teste), SMTP_*, BILLING_*/PANEL_URL, etc.)
-#   - atentbot.admin.env   (envs do admin: AGENT_INTERNAL_URL etc.)
-# Gerar/atualizar os .env a partir do serviço em execução:
-#   docker service inspect atentbot_agent-service \
-#     --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' \
-#     > deploy/atentbot.agent.env
+# Modelo: ${VAR} + variáveis de ambiente definidas NO PORTAINER (não env_file,
+# que é gitignored e não funciona em git-stack — o Portainer clona o repo).
+# Deploy: Portainer -> Stacks -> Add stack -> Repository
+#   Repository URL : https://github.com/AtentBot/paratec  (privado: usar PAT)
+#   Reference       : refs/heads/feat/atentbot-saas-multitenant
+#   Compose path    : deploy/atentbot.stack.yml
+#   Environment variables: preencher TODAS as ${VAR} abaixo (valores atuais são
+#   extraídos do serviço em execução — ver /opt/paratec/deploy/*.env no servidor
+#   ou `docker service inspect atentbot_agent-service`).
 #
-# Redes e volume são EXTERNOS (criados fora desta stack).
+# Infra real (Hetzner, Swarm, node Athena-Evento):
+#   rede pública Traefik: traefik_public | interna admin<->agent+n8n: app_network
+#   entrypoint: websecure | certresolver: le | volume mídia: paratec_agent_media
+# O agente é PRIVADO; o n8n e o admin o alcançam pelo alias `paratec-agent`.
+# Imagens são buildadas no nó e tagueadas por commit (sem registry); trocar via
+# ${ADMIN_IMAGE}/${AGENT_IMAGE} (a landing nova mudará a tag do admin).
+# =============================================================================
 
 version: "3.8"
 
@@ -26,13 +32,56 @@ volumes:
     external: true
 
 services:
+  # Cérebro dos agentes (FastAPI + LangGraph). PRIVADO (sem Traefik).
   agent-service:
-    image: paratec/agent-service:90f9e9a
-    env_file:
-      - atentbot.agent.env
+    image: ${AGENT_IMAGE:-paratec/agent-service:90f9e9a}
+    environment:
+      # Postgres operacional
+      PGHOST: ${PGHOST}
+      PGPORT: ${PGPORT}
+      PGDATABASE: ${PGDATABASE}
+      PGUSER: ${PGUSER}
+      PGPASSWORD: ${PGPASSWORD}
+      # RAG / pgvector (serviço paratec-vector)
+      VECTOR_HOST: ${VECTOR_HOST}
+      VECTOR_DB: ${VECTOR_DB}
+      VECTOR_USER: ${VECTOR_USER}
+      VECTOR_PASSWORD: ${VECTOR_PASSWORD}
+      # LLM
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      # WhatsApp (Evolution)
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
+      # Stripe / billing
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PRICE_ESSENCIAL: ${STRIPE_PRICE_ESSENCIAL}
+      STRIPE_PRICE_PROFISSIONAL: ${STRIPE_PRICE_PROFISSIONAL}
+      STRIPE_PRICE_ESCALA: ${STRIPE_PRICE_ESCALA}
+      # Stripe metered (cobrança de consumo)
+      STRIPE_METER_INDEXACAO: ${STRIPE_METER_INDEXACAO}
+      STRIPE_METER_CONVERSA: ${STRIPE_METER_CONVERSA}
+      STRIPE_PRICE_METER_INDEXACAO: ${STRIPE_PRICE_METER_INDEXACAO}
+      STRIPE_PRICE_METER_CONVERSA: ${STRIPE_PRICE_METER_CONVERSA}
+      BILLING_SUCCESS_URL: ${BILLING_SUCCESS_URL}
+      BILLING_CANCEL_URL: ${BILLING_CANCEL_URL}
+      PANEL_URL: ${PANEL_URL}
+      # Suporte / e-mail (SMTP)
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SSL: ${SMTP_SSL}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME}
+      SMTP_REPLY_TO: ${SMTP_REPLY_TO}
     networks:
       app_network:
-        # admin e n8n chamam o agente por este hostname — NÃO remover.
+        # n8n/Evolution/admin chamam o agente por este nome — NÃO remover.
         aliases:
           - paratec-agent
     volumes:
@@ -41,11 +90,15 @@ services:
       replicas: 1
       restart_policy:
         condition: any
+      update_config:
+        order: start-first
 
+  # Painel + landing (Next.js). ÚNICO serviço público (via Traefik).
   admin:
-    image: paratec/admin:e5cd876
-    env_file:
-      - atentbot.admin.env
+    image: ${ADMIN_IMAGE:-paratec/admin:e5cd876}
+    environment:
+      AGENT_INTERNAL_URL: http://paratec-agent:8000
+      NODE_ENV: production
     networks:
       - app_network
       - traefik_public
@@ -53,10 +106,13 @@ services:
       replicas: 1
       restart_policy:
         condition: any
+      update_config:
+        order: start-first
+      # No Swarm o provider do Traefik lê os labels do SERVIÇO -> deploy.labels.
       labels:
         - "traefik.enable=true"
         - "traefik.docker.network=traefik_public"
-        - "traefik.http.routers.atentbot.rule=Host(`atentbot.com`)"
+        - "traefik.http.routers.atentbot.rule=Host(`atentbot.com`) || Host(`paratec.atentbot.com`)"
         - "traefik.http.routers.atentbot.entrypoints=websecure"
         - "traefik.http.routers.atentbot.tls=true"
         - "traefik.http.routers.atentbot.tls.certresolver=le"
