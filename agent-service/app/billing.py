@@ -52,6 +52,12 @@ def _init_stripe():
     return stripe
 
 
+def _plain(obj):
+    """Objeto do SDK do Stripe -> dict puro (recursivo). Desde o stripe-python
+    v12 os StripeObject não são mais dict: `.get()`/`dict(obj)` quebram."""
+    return obj.to_dict() if hasattr(obj, "to_dict") else obj
+
+
 def _dt(ts) -> datetime | None:
     return datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
 
@@ -336,7 +342,7 @@ def alterar_preco(plano: str, preco: float, aplicar_existentes: bool,
             moeda = "brl"
             lookup_key = f"atentbot_{plano}_mensal"
             if price_antigo:
-                antigo = stripe.Price.retrieve(price_antigo)
+                antigo = _plain(stripe.Price.retrieve(price_antigo))
                 product_id = antigo["product"]
                 moeda = antigo["currency"]
                 rec = antigo.get("recurring") or {}
@@ -362,7 +368,7 @@ def alterar_preco(plano: str, preco: float, aplicar_existentes: bool,
         if aplicar_existentes:
             for sub in store.assinaturas_do_plano(plano):
                 try:
-                    full = stripe.Subscription.retrieve(sub["stripe_subscription_id"])
+                    full = _plain(stripe.Subscription.retrieve(sub["stripe_subscription_id"]))
                     item = next(
                         (it for it in full["items"]["data"]
                          if _plan_do_price(it["price"]["id"]) == plano), None)
@@ -425,6 +431,9 @@ def _sync_subscription(sub_obj: dict) -> None:
         log.warning("webhook: assinatura sem tenant resolvível (customer=%s)", customer_id)
         return
     items = (sub_obj.get("items") or {}).get("data") or []
+    # API Stripe >= 2025-03 moveu current_period_end p/ os itens da assinatura.
+    period_end = sub_obj.get("current_period_end") or max(
+        (it.get("current_period_end") or 0 for it in items), default=0) or None
     # O item do plano base é o que mapeia p/ um plano (os demais são metered).
     price_id, plano = None, None
     for it in items:
@@ -443,7 +452,7 @@ def _sync_subscription(sub_obj: dict) -> None:
         stripe_price_id=price_id,
         status=sub_obj.get("status"),
         cancel_at_period_end=bool(sub_obj.get("cancel_at_period_end")),
-        current_period_end=_dt(sub_obj.get("current_period_end")),
+        current_period_end=_dt(period_end),
     )
 
 
@@ -458,6 +467,8 @@ def processar_webhook(payload: bytes, sig_header: str | None) -> dict:
         )
     except Exception as e:
         raise HTTPException(400, f"assinatura inválida: {e}")
+
+    event = _plain(event)
 
     # Idempotência: cada evento é processado uma única vez.
     try:
@@ -481,7 +492,7 @@ def processar_webhook(payload: bytes, sig_header: str | None) -> dict:
             if sub_id:
                 try:
                     full = stripe.Subscription.retrieve(sub_id)
-                    _sync_subscription(dict(full))
+                    _sync_subscription(_plain(full))
                 except Exception as e:  # pragma: no cover
                     log.warning("retrieve subscription %s falhou: %s", sub_id, e)
                     store.upsert_subscription(
@@ -490,15 +501,17 @@ def processar_webhook(payload: bytes, sig_header: str | None) -> dict:
                     )
     elif tipo in ("customer.subscription.created", "customer.subscription.updated",
                   "customer.subscription.deleted"):
-        _sync_subscription(dict(obj))
+        _sync_subscription(obj)
     elif tipo in ("invoice.paid", "invoice.payment_succeeded", "invoice.payment_failed"):
         # O status vem via customer.subscription.updated; aqui reforçamos o período
         # quando a fatura tem a assinatura embutida.
-        sub_id = obj.get("subscription")
+        # API Stripe >= 2025-03: a assinatura da fatura fica em parent.subscription_details.
+        sub_id = obj.get("subscription") or (
+            ((obj.get("parent") or {}).get("subscription_details") or {}).get("subscription"))
         if sub_id:
             try:
                 full = stripe.Subscription.retrieve(sub_id)
-                _sync_subscription(dict(full))
+                _sync_subscription(_plain(full))
             except Exception as e:  # pragma: no cover
                 log.warning("retrieve subscription (invoice) %s falhou: %s", sub_id, e)
 

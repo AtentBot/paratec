@@ -213,3 +213,28 @@ def test_plans_store_e_historico():
     assert {x["id"]: x["preco"] for x in billing.planos()}["essencial"] == 790.5
     store.execute("DELETE FROM plan_price_history")
     store.execute("UPDATE plans SET preco = 690, stripe_price_id = NULL WHERE id = 'essencial'")
+
+
+def test_webhook_aceita_objetos_do_sdk_stripe(monkeypatch):
+    """stripe-python >= 12: StripeObject não é dict (regressão de dict(obj)/.get)."""
+    import stripe
+
+    monkeypatch.setattr(settings, "stripe_secret_key", "sk_test", raising=False)
+    monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec", raising=False)
+    sub = {"object": "subscription", "id": "sub_1", "customer": "cus_1", "status": "active",
+           "cancel_at_period_end": False, "metadata": {},
+           "items": {"object": "list", "data": [
+               {"id": "si_1", "current_period_end": 1_900_000_000,
+                "price": {"object": "price", "id": "price_velho"}}]}}
+    evento = stripe.StripeObject.construct_from(
+        {"id": "evt_1", "type": "customer.subscription.updated", "data": {"object": sub}}, "k")
+    monkeypatch.setattr(stripe.Webhook, "construct_event", lambda *a, **k: evento)
+    monkeypatch.setattr(store, "stripe_event_seen", lambda *a: False)
+    monkeypatch.setattr(store, "get_subscription_tenant_by_customer", lambda c: 3)
+    monkeypatch.setattr(store, "plan_by_price_id", lambda pid: "essencial")
+    capt = {}
+    monkeypatch.setattr(store, "upsert_subscription", lambda t, **kw: capt.update(kw, tenant=t))
+
+    assert billing.processar_webhook(b"{}", "sig")["ok"]
+    assert capt["tenant"] == 3 and capt["plan"] == "essencial" and capt["status"] == "active"
+    assert capt["current_period_end"] is not None  # veio do item (API nova)
