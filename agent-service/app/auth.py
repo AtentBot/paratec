@@ -13,6 +13,8 @@ import hmac
 import logging
 import re
 import secrets
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -277,14 +279,65 @@ def trocar_senha(user_id: int, atual: str, nova: str) -> None:
     store.set_password(user_id, hash_senha(nova))
 
 
-def login(email: str, senha: str) -> dict:
-    """Valida credenciais e devolve o usuário (sem abrir sessão). 401 se inválido."""
+# --- Anti-brute-force do login (janela + lockout, em memória) --------------
+# Rastreia tentativas por (email, ip). Protege contra password spraying e
+# contra o DoS de CPU do Argon2 (cada verify é caro). 1 réplica → dict + lock
+# bastam; com várias réplicas, migrar para Redis.
+
+_login_lock = threading.Lock()
+_login_falhas: dict[str, list[float]] = {}
+_login_ate: dict[str, float] = {}
+
+
+def _login_chave(email: str, ip: str | None) -> str:
+    return f"{(email or '').strip().lower()}|{ip or '?'}"
+
+
+def _login_bloqueado_ate(chave: str) -> float:
+    """Segundos restantes de bloqueio (0 se liberado). Também limpa expirados."""
+    agora = time.monotonic()
+    with _login_lock:
+        ate = _login_ate.get(chave, 0.0)
+        if ate and ate <= agora:
+            _login_ate.pop(chave, None)
+            _login_falhas.pop(chave, None)
+            return 0.0
+        return max(0.0, ate - agora)
+
+
+def _login_registrar_falha(chave: str) -> None:
+    """Conta a falha; ao estourar o limite na janela, arma o lockout."""
+    agora = time.monotonic()
+    with _login_lock:
+        janela = [t for t in _login_falhas.get(chave, []) if agora - t < settings.login_janela_seg]
+        janela.append(agora)
+        _login_falhas[chave] = janela
+        if len(janela) >= settings.login_max_tentativas:
+            _login_ate[chave] = agora + settings.login_lockout_seg
+
+
+def _login_sucesso(chave: str) -> None:
+    with _login_lock:
+        _login_falhas.pop(chave, None)
+        _login_ate.pop(chave, None)
+
+
+def login(email: str, senha: str, ip: str | None = None) -> dict:
+    """Valida credenciais e devolve o usuário (sem abrir sessão). 401 se inválido,
+    423 se a origem estiver temporariamente bloqueada por excesso de tentativas."""
+    chave = _login_chave(email, ip)
+    restante = _login_bloqueado_ate(chave)
+    if restante > 0:
+        raise HTTPException(423, "muitas tentativas; conta temporariamente bloqueada",
+                            headers={"Retry-After": str(int(restante) + 1)})
     u = store.get_user_by_email((email or "").strip())
     if not u or not u.get("ativo") or not verificar_senha(u["password_hash"], senha or ""):
+        _login_registrar_falha(chave)
         raise HTTPException(401, "e-mail ou senha inválidos")
     if not u.get("email_verificado_em"):
         # Senha já conferida: dá pra dizer o motivo sem vazar existência da conta.
         raise HTTPException(403, "email_nao_verificado")
+    _login_sucesso(chave)
     return u
 
 

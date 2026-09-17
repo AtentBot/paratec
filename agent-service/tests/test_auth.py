@@ -229,3 +229,33 @@ def test_checkout_exige_whatsapp_verificado():
         assert r.status_code == 403 and r.json()["detail"] == "whatsapp_nao_verificado"
     finally:
         main.app.dependency_overrides.pop(auth.current_tenant, None)
+
+
+def test_login_lockout_apos_muitas_tentativas(monkeypatch):
+    """Após login_max_tentativas falhas do mesmo (email, ip), o login é
+    bloqueado com 423 (Locked) — anti-brute-force / anti-spray."""
+    # Sem DB: força o caminho de credencial inválida (usuário inexistente).
+    monkeypatch.setattr(auth.store, "get_user_by_email", lambda _e: None)
+    # Isola o estado em memória deste teste.
+    auth._login_falhas.clear()
+    auth._login_ate.clear()
+
+    email, ip = "alvo@empresa.com", "203.0.113.7"
+    for _ in range(auth.settings.login_max_tentativas):
+        with pytest.raises(HTTPException) as ei:
+            auth.login(email, "senha-errada", ip=ip)
+        assert ei.value.status_code == 401
+
+    # A próxima já vem bloqueada (423), mesmo com a "senha certa".
+    with pytest.raises(HTTPException) as ei:
+        auth.login(email, "qualquer", ip=ip)
+    assert ei.value.status_code == 423
+    assert "Retry-After" in ei.value.headers
+
+    # Outro IP não é afetado pelo bloqueio do primeiro.
+    with pytest.raises(HTTPException) as ei:
+        auth.login(email, "senha-errada", ip="198.51.100.1")
+    assert ei.value.status_code == 401
+
+    auth._login_falhas.clear()
+    auth._login_ate.clear()

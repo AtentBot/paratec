@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -68,6 +69,10 @@ MEDIA_DIR = Path(settings.media_dir) if settings.media_dir else Path(__file__).r
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
+# Conexões SSE (tempo real) abertas por tenant — teto em settings.
+_sse_lock = threading.Lock()
+_sse_abertos: dict[int, int] = {}
+
 # Tipos de imagem aceitos no upload de banner.
 _IMAGE_MIMES = {
     "image/jpeg": ".jpg",
@@ -82,6 +87,21 @@ def _media_file(nome: str) -> Path:
     if p.parent != MEDIA_DIR.resolve():
         raise HTTPException(status_code=400, detail="caminho de mídia inválido")
     return p
+
+
+async def _ler_upload_limitado(file: UploadFile, max_mb: int) -> bytes:
+    """Lê o upload em blocos, abortando com 413 acima do teto — evita que um
+    arquivo gigante estoure a memória/disco da réplica (DoS de disponibilidade)."""
+    limite = max_mb * 1024 * 1024
+    buf = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        buf.extend(chunk)
+        if len(buf) > limite:
+            raise HTTPException(status_code=413, detail=f"arquivo acima de {max_mb} MB")
+    return bytes(buf)
 
 # A tela adm (Next.js) roda em outra origem; libera CORS para o painel.
 app.add_middleware(
@@ -260,7 +280,8 @@ def health():
                 n = cur.fetchone()["n"]
         return {"status": "ok", "produtos": n, "model": settings.llm_model}
     except Exception as e:  # pragma: no cover
-        return {"status": "degraded", "erro": str(e)}
+        logging.getLogger("atentbot").warning("health check degradado: %s", e)
+        return {"status": "degraded"}
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -314,8 +335,8 @@ def auth_whatsapp_verify(req: WhatsappVerificarRequest,
 
 
 @app.post("/auth/login")
-def auth_login(req: LoginRequest, response: Response):
-    u = auth.login(req.email, req.senha)
+def auth_login(req: LoginRequest, request: Request, response: Response):
+    u = auth.login(req.email, req.senha, ip=api_publica.ip_cliente(request))
     auth.abrir_sessao(response, u["id"])
     return {"email": u["email"], "nome": u.get("nome"), "role": u["role"], "tenant_id": u["tenant_id"]}
 
@@ -667,6 +688,13 @@ async def stream(thread_id: str, request: Request,
     """Push em tempo real (SSE) por conversa. Canal namespaced por tenant."""
     canal = f"{tenant.tenant_id}:{thread_id}"
 
+    # Teto de streams simultâneos por tenant: um cliente não segura conexões/
+    # memória da réplica única sem limite (DoS de disponibilidade).
+    with _sse_lock:
+        if _sse_abertos.get(tenant.tenant_id, 0) >= settings.sse_max_conexoes_por_tenant:
+            raise HTTPException(status_code=429, detail="limite de conexões em tempo real atingido")
+        _sse_abertos[tenant.tenant_id] = _sse_abertos.get(tenant.tenant_id, 0) + 1
+
     async def gen():
         q = await realtime.broker.subscribe(canal)
         try:
@@ -681,6 +709,12 @@ async def stream(thread_id: str, request: Request,
                     yield ": keep-alive\n\n"
         finally:
             realtime.broker.unsubscribe(canal, q)
+            with _sse_lock:
+                n = _sse_abertos.get(tenant.tenant_id, 1) - 1
+                if n > 0:
+                    _sse_abertos[tenant.tenant_id] = n
+                else:
+                    _sse_abertos.pop(tenant.tenant_id, None)
 
     return StreamingResponse(
         gen(),
@@ -1197,14 +1231,18 @@ async def rag_upload(file: UploadFile = File(...),
     from . import rag
     if not settings.rag_enabled:
         raise HTTPException(status_code=503, detail="RAG não configurado (VECTOR_HOST)")
-    data = await file.read()
+    data = await _ler_upload_limitado(file, settings.upload_max_mb_documento)
     if not data:
         raise HTTPException(status_code=422, detail="arquivo vazio")
     try:
         return rag.ingest_documento(tenant.tenant_id, file.filename or "documento",
                                     data, file.content_type)
+    except HTTPException:
+        raise
     except Exception as e:  # pragma: no cover
-        raise HTTPException(status_code=500, detail=f"falha no upload: {e}")
+        logging.getLogger("atentbot").warning("falha no upload RAG (tenant %s): %s",
+                                               tenant.tenant_id, e)
+        raise HTTPException(status_code=500, detail="falha ao processar o arquivo")
 
 
 @app.get("/rag/fontes")
@@ -1372,7 +1410,7 @@ def catalog_modelo(tenant: TenantCtx = Depends(current_tenant)):
 async def catalog_import(file: UploadFile = File(...),
                          tenant: TenantCtx = Depends(require_active_subscription)):
     """Importa/atualiza o catálogo do tenant a partir de um CSV."""
-    data = await file.read()
+    data = await _ler_upload_limitado(file, settings.upload_max_mb_csv)
     if not data:
         raise HTTPException(status_code=422, detail="arquivo vazio")
     try:
@@ -1382,7 +1420,9 @@ async def catalog_import(file: UploadFile = File(...),
     try:
         return ingest.importar(tenant.tenant_id, produtos)
     except Exception as e:  # pragma: no cover
-        raise HTTPException(status_code=500, detail=f"falha ao importar: {e}")
+        logging.getLogger("atentbot").warning("falha ao importar catálogo (tenant %s): %s",
+                                               tenant.tenant_id, e)
+        raise HTTPException(status_code=500, detail="falha ao importar o catálogo")
 
 
 @app.delete("/catalog")

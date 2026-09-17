@@ -102,6 +102,19 @@ class Settings(BaseSettings):
     whatsapp_codigo_max_por_hora: int = 5
     # Secure=false facilita o dev local em http; em produção deixe true.
     session_cookie_secure: bool = True
+    # Anti-brute-force do login: tentativas por janela antes do lockout, tamanho
+    # da janela e duração do bloqueio (respondido com 423 Locked). Chave = e-mail
+    # + IP de origem. Em memória (1 réplica); com várias, mover p/ Redis.
+    login_max_tentativas: int = 8
+    login_janela_seg: int = 300
+    login_lockout_seg: int = 900
+
+    # Limites de upload (proteção de disponibilidade: evita OOM/enchimento de
+    # disco na réplica única). Documentos do RAG e CSVs de catálogo.
+    upload_max_mb_documento: int = 25
+    upload_max_mb_csv: int = 10
+    # Máximo de conexões SSE (tempo real) simultâneas por tenant.
+    sse_max_conexoes_por_tenant: int = 20
 
     # -----------------------------------------------------------------------
     # Stripe (assinatura SaaS). Vazio = billing desabilitado.
