@@ -3,10 +3,10 @@ import type { NextRequest } from "next/server";
 
 // Rotas do PAINEL: exigem sessão (cookie). A validade real é checada no backend
 // (/auth/me); aqui só barramos quem nem cookie tem, redirecionando ao /login.
-// A tela /assinatura fica protegida mas acessível a quem tem sessão sem plano
-// ativo (o cookie existe), para o responsável conseguir assinar.
+// Onboarding (também exige sessão): o <AccountGate/> do painel manda para
+// /verificar-whatsapp (código) e depois /ativar (escolha de plano + cartão).
 const PROTEGIDAS = [
-  "/painel", "/conversas", "/clientes", "/equipe", "/orcamentos", "/catalogo",
+  "/verificar-whatsapp", "/ativar", "/painel", "/conversas", "/clientes", "/equipe", "/orcamentos", "/catalogo",
   "/fila", "/promocoes", "/conhecimento", "/relatorios", "/agentes",
   "/configuracoes", "/assinatura", "/suporte", "/admin", "/conta", "/integracoes",
 ];

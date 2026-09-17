@@ -98,3 +98,20 @@ def notificar_nova_mensagem(
     )
     enviar(settings.reply_to, f"[AtentBot] Nova mensagem no chamado #{ticket_id}",
            texto, reply_to=cliente_email)
+
+
+# --- Conta ------------------------------------------------------------------
+
+def enviar_verificacao_email(to: str, nome: str | None, link: str) -> None:
+    """Link de confirmação do e-mail enviado no cadastro (e nos reenvios)."""
+    saudacao = f"Olá, {nome}!" if nome else "Olá!"
+    enviar(
+        to, "[AtentBot] Confirme seu e-mail",
+        f"{saudacao}\n\n"
+        f"Para ativar sua conta no AtentBot, confirme seu e-mail pelo link abaixo:\n\n"
+        f"{link}\n\n"
+        f"O link vale por {settings.email_verification_ttl_hours} horas. "
+        f"Depois da confirmação você valida seu WhatsApp, escolhe o plano e "
+        f"cadastra o cartão para liberar o painel.\n\n"
+        f"Se você não criou esta conta, ignore este e-mail.",
+    )

@@ -4,24 +4,32 @@ import { api } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ReenviarVerificacao } from "../_components/reenviar-verificacao";
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState<string | null>(null);
+  const [naoVerificado, setNaoVerificado] = useState(false);
   const [carregando, setCarregando] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setErro(null);
+    setNaoVerificado(false);
     setCarregando(true);
     try {
       await api.login(email, senha);
       const next = new URLSearchParams(window.location.search).get("next");
-      router.push(next && next.startsWith("/") ? next : "/painel");
-    } catch {
-      setErro("E-mail ou senha inválidos.");
+      router.push(next && next.startsWith("/") && !next.startsWith("//") ? next : "/painel");
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("403")) {
+        setNaoVerificado(true);
+        setErro("Confirme seu e-mail antes de entrar. Procure o link que enviamos no cadastro.");
+      } else {
+        setErro("E-mail ou senha inválidos.");
+      }
       setCarregando(false);
     }
   }
@@ -50,6 +58,7 @@ export default function LoginPage() {
         </label>
 
         {erro && <p className="text-sm text-danger">{erro}</p>}
+        {naoVerificado && <ReenviarVerificacao email={email} />}
 
         <button
           type="submit" disabled={carregando}

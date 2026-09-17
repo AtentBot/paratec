@@ -60,6 +60,9 @@ def main() -> int:
     user = store.create_user(
         tenant["id"], args.email, auth.hash_senha(args.senha), args.nome, role="owner"
     )
+    # conta semeada pela equipe: já confiável (e-mail e WhatsApp)
+    store.mark_email_verified(user["id"])
+    store.mark_whatsapp_verified(user["id"])
     store.ensure_default_agent(tenant["id"])
     print(f"owner criado: {user['email']} para o tenant '{args.slug}' "
           f"(id={tenant['id']}). Já é possível logar no painel.")

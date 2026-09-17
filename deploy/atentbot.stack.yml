@@ -54,6 +54,8 @@ services:
       EVOLUTION_API_URL: ${EVOLUTION_API_URL}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
       EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
+      # Instância (número do AtentBot) que envia o código de verificação do cadastro.
+      WHATSAPP_VERIFICACAO_INSTANCIA: ${WHATSAPP_VERIFICACAO_INSTANCIA:-}
       # Stripe / billing
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}

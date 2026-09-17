@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Gauge,
   Tags,
+  MessageCircleCode,
   LogOut,
   PlugZap,
   Zap,
@@ -65,6 +66,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/chamados", label: "Chamados", icon: LifeBuoy },
   { href: "/admin/assinaturas", label: "Assinaturas", icon: CreditCard },
   { href: "/admin/planos", label: "Planos e preços", icon: Tags },
+  { href: "/admin/whatsapp", label: "WhatsApp verificação", icon: MessageCircleCode },
   { href: "/admin/consumo", label: "Consumo", icon: Gauge },
   { href: "/admin/integracoes", label: "Chaves de API", icon: PlugZap },
 ];

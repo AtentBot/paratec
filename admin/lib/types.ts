@@ -236,6 +236,8 @@ export interface Me {
   username: string | null;
   role: string;
   is_staff: boolean;
+  whatsapp: string | null;
+  verificacoes: { email: boolean; whatsapp: boolean };
   tenant: { id: number; nome: string | null; slug: string | null };
   assinatura: AssinaturaStatus;
 }
@@ -484,4 +486,15 @@ export interface WebhookResultado {
   erro: string | null;
   tentativas: number;
   duracao_ms: number;
+}
+
+// --- Central admin: WhatsApp da plataforma (códigos de verificação) ---
+export interface AdminWhatsappVerificacao {
+  evolution_configurada: boolean;
+  instancia: string | null;
+  origem: "painel" | "ambiente" | null;
+  estado: WhatsappEstado | null;
+  numero: string | null;
+  perfil: string | null;
+  erro: string | null;
 }

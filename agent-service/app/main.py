@@ -178,6 +178,25 @@ class SignupRequest(BaseModel):
     email: str
     senha: str
     nome: str | None = None
+    plano: str | None = None   # plano escolhido na landing (segue no link do e-mail)
+    whatsapp: str | None = None  # obrigatório (validado em auth.signup)
+
+
+class VerificarEmailRequest(BaseModel):
+    token: str
+
+
+class ReenviarVerificacaoRequest(BaseModel):
+    email: str
+    plano: str | None = None
+
+
+class WhatsappCodigoRequest(BaseModel):
+    telefone: str | None = None   # troca o número do cadastro (antes de verificar)
+
+
+class WhatsappVerificarRequest(BaseModel):
+    codigo: str
 
 
 class LoginRequest(BaseModel):
@@ -257,14 +276,41 @@ def chat(req: ChatRequest):
 # Autenticação (sessão por cookie)
 # =========================================================================
 
+def _plano_ou_none(plano: str | None) -> str | None:
+    return plano if plano in billing.PLANOS else None
+
+
 @app.post("/auth/signup")
-def auth_signup(req: SignupRequest, response: Response):
-    res = auth.signup(req.empresa, req.email, req.senha, req.nome)
-    auth.abrir_sessao(response, res["user"]["id"])
-    return {
-        "tenant": {"id": res["tenant"]["id"], "nome": res["tenant"]["nome"], "slug": res["tenant"]["slug"]},
-        "user": {"email": res["user"]["email"], "nome": res["user"].get("nome"), "role": res["user"]["role"]},
-    }
+def auth_signup(req: SignupRequest):
+    # Sem sessão aqui: o acesso começa só depois de confirmar o e-mail.
+    res = auth.signup(req.empresa, req.email, req.senha, req.nome, _plano_ou_none(req.plano),
+                      req.whatsapp)
+    return {"verificacao_enviada": True, "email": res["user"]["email"]}
+
+
+@app.post("/auth/verify-email")
+def auth_verify_email(req: VerificarEmailRequest, response: Response):
+    u = auth.verificar_email(req.token)
+    auth.abrir_sessao(response, u["id"])
+    return {"email": u["email"], "nome": u.get("nome"), "role": u["role"], "tenant_id": u["tenant_id"]}
+
+
+@app.post("/auth/resend-verification")
+def auth_resend_verification(req: ReenviarVerificacaoRequest):
+    auth.reenviar_verificacao(req.email, _plano_ou_none(req.plano))
+    return {"ok": True}
+
+
+@app.post("/auth/whatsapp/send-code")
+def auth_whatsapp_send_code(req: WhatsappCodigoRequest | None = None,
+                            tenant: TenantCtx = Depends(current_tenant)):
+    return auth.enviar_codigo_whatsapp(tenant, req.telefone if req else None)
+
+
+@app.post("/auth/whatsapp/verify")
+def auth_whatsapp_verify(req: WhatsappVerificarRequest,
+                         tenant: TenantCtx = Depends(current_tenant)):
+    return auth.confirmar_codigo_whatsapp(tenant, req.codigo)
 
 
 @app.post("/auth/login")
@@ -301,6 +347,9 @@ def auth_me(tenant: TenantCtx = Depends(current_tenant)):
         "username": tenant.email,
         "role": tenant.role,
         "is_staff": tenant.is_staff,
+        "whatsapp": tenant.whatsapp,
+        # E-mail é sempre verificado aqui (sessão só existe após o link).
+        "verificacoes": {"email": True, "whatsapp": tenant.whatsapp_verificado},
         "tenant": {"id": tenant.tenant_id, "nome": (t or {}).get("nome"), "slug": (t or {}).get("slug")},
         "assinatura": billing.status(tenant.tenant_id),
     }
@@ -330,6 +379,8 @@ def billing_usage(tenant: TenantCtx = Depends(current_tenant)):
 def billing_checkout(req: CheckoutRequest, tenant: TenantCtx = Depends(current_tenant)):
     if tenant.role != "owner":
         raise HTTPException(403, "apenas o responsável da conta pode assinar")
+    if not tenant.whatsapp_verificado:
+        raise HTTPException(403, "whatsapp_nao_verificado")
     return {"url": billing.criar_checkout(tenant, req.plano)}
 
 
@@ -786,7 +837,9 @@ def whatsapp_config(tenant: TenantCtx = Depends(require_active_subscription)):
 
 @app.get("/whatsapp/instancias")
 def whatsapp_instancias(tenant: TenantCtx = Depends(require_active_subscription)):
-    return _evolution_call(evolution.listar_instancias)
+    # A Evolution é compartilhada: cada tenant só vê as instâncias mapeadas a ele.
+    minhas = set(store.list_instances(tenant.tenant_id))
+    return [i for i in _evolution_call(evolution.listar_instancias) if i.get("nome") in minhas]
 
 
 @app.post("/whatsapp/instancias")
@@ -795,7 +848,7 @@ def whatsapp_criar(req: InstanciaCreate,
     """Cria uma instância, mapeia ao tenant e devolve o QR Code inicial."""
     nome = _normalizar_instancia(req.nome)
     outro = store.get_tenant_by_instancia(nome)
-    if outro is not None and outro != tenant.tenant_id:
+    if nome == auth.instancia_verificacao() or (outro is not None and outro != tenant.tenant_id):
         raise HTTPException(status_code=409, detail="este número já pertence a outra conta")
     qr = _evolution_call(evolution.criar_instancia, nome)
     store.register_instance(tenant.tenant_id, nome)
@@ -830,10 +883,106 @@ def whatsapp_remover(nome: str, tenant: TenantCtx = Depends(require_active_subsc
 
 
 def _guard_instancia_do_tenant(tenant_id: int, nome: str) -> None:
-    """Impede um tenant de operar a instância de outro."""
-    dono = store.get_tenant_by_instancia(nome)
-    if dono is not None and dono != tenant_id:
+    """Só o tenant dono opera a instância. Instâncias sem dono (de outros projetos
+    na mesma Evolution) e a da plataforma ficam inacessíveis."""
+    if nome == auth.instancia_verificacao() or store.get_tenant_by_instancia(nome) != tenant_id:
         raise HTTPException(status_code=404, detail="instância não encontrada")
+
+
+# =========================================================================
+# ADMIN — WhatsApp de verificação (número DA PLATAFORMA que envia os códigos
+# do cadastro). Sincronizado por QR Code na central admin; sem webhook.
+# =========================================================================
+
+class TesteWhatsappReq(BaseModel):
+    telefone: str
+
+
+def _instancia_plataforma_ou_404() -> str:
+    nome = auth.instancia_verificacao()
+    if not nome:
+        raise HTTPException(404, "nenhum número de verificação configurado")
+    return nome
+
+
+@app.get("/admin/whatsapp-verificacao")
+def admin_wa_verif(admin: TenantCtx = Depends(current_admin)):
+    do_painel = store.get_platform_setting(auth.CHAVE_INSTANCIA_VERIFICACAO)
+    nome = auth.instancia_verificacao()
+    out = {
+        "evolution_configurada": settings.evolution_configured,
+        "instancia": nome or None,
+        "origem": "painel" if do_painel else ("ambiente" if nome else None),
+        "estado": None, "numero": None, "perfil": None, "erro": None,
+    }
+    if nome and settings.evolution_configured:
+        try:
+            st = evolution.status_instancia(nome)
+            out.update(estado=st.get("estado"), numero=st.get("numero"), perfil=st.get("perfil"))
+        except evolution.EvolutionError as e:
+            out["erro"] = str(e)
+    return out
+
+
+@app.post("/admin/whatsapp-verificacao")
+def admin_wa_verif_criar(req: InstanciaCreate, admin: TenantCtx = Depends(current_admin)):
+    """Cria (ou reaproveita) a instância da plataforma e devolve o QR Code."""
+    _evolution_guard()
+    nome = _normalizar_instancia(req.nome)
+    if store.get_tenant_by_instancia(nome) is not None:
+        raise HTTPException(409, "esta instância pertence a um cliente; use outro nome")
+    try:
+        qr = evolution.criar_instancia(nome, webhook=False)
+    except evolution.EvolutionError:
+        # Já existe na Evolution (ex.: reconfiguração): só pede um QR novo.
+        qr = _evolution_call(evolution.conectar_instancia, nome)
+    store.set_platform_setting(auth.CHAVE_INSTANCIA_VERIFICACAO, nome, admin.user_id)
+    return {"nome": nome, "qrcode": qr}
+
+
+@app.get("/admin/whatsapp-verificacao/qrcode")
+def admin_wa_verif_qrcode(admin: TenantCtx = Depends(current_admin)):
+    nome = _instancia_plataforma_ou_404()
+    return {"nome": nome, "qrcode": _evolution_call(evolution.conectar_instancia, nome)}
+
+
+@app.get("/admin/whatsapp-verificacao/status")
+def admin_wa_verif_status(admin: TenantCtx = Depends(current_admin)):
+    return _evolution_call(evolution.status_instancia, _instancia_plataforma_ou_404())
+
+
+@app.post("/admin/whatsapp-verificacao/teste")
+def admin_wa_verif_teste(req: TesteWhatsappReq, admin: TenantCtx = Depends(current_admin)):
+    """Envia uma mensagem de teste pelo número de verificação."""
+    nome = _instancia_plataforma_ou_404()
+    numero = auth.normalizar_whatsapp(req.telefone)
+    if not numero:
+        raise HTTPException(400, "informe um WhatsApp válido com DDD")
+    _evolution_call(evolution.enviar_texto, numero,
+                    "AtentBot: teste do número de verificação. Está funcionando!", nome)
+    return {"enviado": True, "whatsapp": numero}
+
+
+@app.post("/admin/whatsapp-verificacao/desconectar")
+def admin_wa_verif_desconectar(admin: TenantCtx = Depends(current_admin)):
+    nome = _instancia_plataforma_ou_404()
+    _evolution_call(evolution.desconectar_instancia, nome)
+    return {"nome": nome, "estado": "desconectado"}
+
+
+@app.delete("/admin/whatsapp-verificacao")
+def admin_wa_verif_remover(admin: TenantCtx = Depends(current_admin)):
+    """Remove a instância da Evolution e limpa a configuração do painel."""
+    nome = store.get_platform_setting(auth.CHAVE_INSTANCIA_VERIFICACAO)
+    if not nome:
+        raise HTTPException(409, "o número atual vem da variável de ambiente; remova-a no servidor")
+    _evolution_guard()
+    try:
+        evolution.remover_instancia(nome)
+    except evolution.EvolutionError as e:  # já removida na Evolution: segue limpando
+        logging.getLogger("atentbot").warning("remoção da instância %s falhou: %s", nome, e)
+    store.set_platform_setting(auth.CHAVE_INSTANCIA_VERIFICACAO, None, admin.user_id)
+    return {"removido": nome}
 
 
 # =========================================================================

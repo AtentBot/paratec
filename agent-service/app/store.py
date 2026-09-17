@@ -909,6 +909,13 @@ def register_instance(tenant_id: int, instancia: str) -> None:
     )
 
 
+def list_instances(tenant_id: int) -> list[str]:
+    """Nomes das instâncias Evolution que pertencem ao tenant."""
+    rows = query("SELECT instancia FROM instances WHERE tenant_id = %s ORDER BY instancia",
+                 (tenant_id,))
+    return [r["instancia"] for r in rows]
+
+
 def unregister_instance(tenant_id: int, instancia: str) -> None:
     execute(
         "DELETE FROM instances WHERE tenant_id = %s AND instancia = %s",
@@ -919,13 +926,14 @@ def unregister_instance(tenant_id: int, instancia: str) -> None:
 # --- Usuários -------------------------------------------------------------
 
 def create_user(
-    tenant_id: int, email: str, password_hash: str, nome: str | None = None, role: str = "owner"
+    tenant_id: int, email: str, password_hash: str, nome: str | None = None, role: str = "owner",
+    whatsapp: str | None = None,
 ) -> dict:
     rows = execute(
-        """INSERT INTO users (tenant_id, email, password_hash, nome, role)
-             VALUES (%s, %s, %s, %s, %s)
-             RETURNING id, tenant_id, email, nome, role, ativo, created_at""",
-        (tenant_id, email, password_hash, nome, role), returning=True,
+        """INSERT INTO users (tenant_id, email, password_hash, nome, role, whatsapp)
+             VALUES (%s, %s, %s, %s, %s, %s)
+             RETURNING id, tenant_id, email, nome, role, ativo, whatsapp, created_at""",
+        (tenant_id, email, password_hash, nome, role, whatsapp), returning=True,
     )
     return rows[0]
 
@@ -933,7 +941,8 @@ def create_user(
 def get_user_by_email(email: str) -> dict | None:
     """Inclui password_hash (para o login) e tenant_id."""
     rows = query(
-        """SELECT id, tenant_id, email, password_hash, nome, role, ativo
+        """SELECT id, tenant_id, email, password_hash, nome, role, ativo,
+                  email_verificado_em
              FROM users WHERE lower(email) = lower(%s)""",
         (email,),
     )
@@ -960,6 +969,159 @@ def set_password(user_id: int, password_hash: str) -> None:
     )
 
 
+# --- Verificação de e-mail -----------------------------------------------
+
+def create_email_verification(user_id: int, token_hash: str, expires_at) -> None:
+    execute(
+        "INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+        (user_id, token_hash, expires_at),
+    )
+
+
+def count_recent_email_verifications(user_id: int, minutes: int) -> int:
+    rows = query(
+        """SELECT count(*) AS n FROM email_verifications
+            WHERE user_id = %s AND created_at > now() - make_interval(mins => %s)""",
+        (user_id, minutes),
+    )
+    return int(rows[0]["n"])
+
+
+def consume_email_verification(token_hash: str) -> dict | None:
+    """Consome o token (uso único, não expirado) e marca o e-mail do usuário
+    como verificado. Devolve o usuário, ou None se o token é inválido."""
+    rows = execute(
+        """WITH v AS (
+               UPDATE email_verifications SET used_at = now()
+                WHERE token_hash = %s AND used_at IS NULL AND expires_at > now()
+                RETURNING user_id
+           )
+           UPDATE users u
+              SET email_verificado_em = COALESCE(u.email_verificado_em, now()),
+                  updated_at = now()
+             FROM v
+            WHERE u.id = v.user_id AND u.ativo = true
+        RETURNING u.id, u.tenant_id, u.email, u.nome, u.role""",
+        (token_hash,), returning=True,
+    )
+    return rows[0] if rows else None
+
+
+def mark_email_verified(user_id: int) -> None:
+    execute(
+        """UPDATE users SET email_verificado_em = COALESCE(email_verificado_em, now()),
+                            updated_at = now() WHERE id = %s""",
+        (user_id,),
+    )
+
+
+# --- Configurações da plataforma ------------------------------------------
+
+def get_platform_setting(chave: str) -> str | None:
+    rows = query("SELECT valor FROM platform_settings WHERE chave = %s", (chave,))
+    return rows[0]["valor"] if rows else None
+
+
+def set_platform_setting(chave: str, valor: str | None, user_id: int | None = None) -> None:
+    """Grava (ou apaga, com valor None) uma configuração da plataforma."""
+    if valor is None:
+        execute("DELETE FROM platform_settings WHERE chave = %s", (chave,))
+        return
+    execute(
+        """INSERT INTO platform_settings (chave, valor, updated_by) VALUES (%s, %s, %s)
+             ON CONFLICT (chave) DO UPDATE
+                SET valor = EXCLUDED.valor, updated_by = EXCLUDED.updated_by, updated_at = now()""",
+        (chave, valor, user_id),
+    )
+
+
+# --- Verificação de WhatsApp ---------------------------------------------
+
+def create_whatsapp_verification(user_id: int, telefone: str, code_hash: str, expires_at) -> None:
+    """Novo código para o usuário; os anteriores ainda não usados deixam de valer."""
+    with get_pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE whatsapp_verifications SET used_at = now()
+                    WHERE user_id = %s AND used_at IS NULL""",
+                (user_id,),
+            )
+            cur.execute(
+                """INSERT INTO whatsapp_verifications (user_id, telefone, code_hash, expires_at)
+                   VALUES (%s, %s, %s, %s)""",
+                (user_id, telefone, code_hash, expires_at),
+            )
+
+
+def whatsapp_verifications_recentes(user_id: int, minutes: int) -> dict:
+    """Quantos códigos foram gerados na janela e quando saiu o último."""
+    rows = query(
+        """SELECT count(*) AS n, max(created_at) AS ultimo FROM whatsapp_verifications
+            WHERE user_id = %s AND created_at > now() - make_interval(mins => %s)""",
+        (user_id, minutes),
+    )
+    return {"n": int(rows[0]["n"]), "ultimo": rows[0]["ultimo"]}
+
+
+def get_active_whatsapp_verification(user_id: int) -> dict | None:
+    rows = query(
+        """SELECT id, telefone, code_hash, tentativas FROM whatsapp_verifications
+            WHERE user_id = %s AND used_at IS NULL AND expires_at > now()
+            ORDER BY created_at DESC LIMIT 1""",
+        (user_id,),
+    )
+    return rows[0] if rows else None
+
+
+def increment_whatsapp_attempt(verification_id: int) -> None:
+    execute(
+        "UPDATE whatsapp_verifications SET tentativas = tentativas + 1 WHERE id = %s",
+        (verification_id,),
+    )
+
+
+def whatsapp_em_uso(telefone: str, exceto_user_id: int) -> bool:
+    rows = query(
+        """SELECT 1 FROM users WHERE whatsapp = %s AND whatsapp_verificado_em IS NOT NULL
+              AND id <> %s LIMIT 1""",
+        (telefone, exceto_user_id),
+    )
+    return bool(rows)
+
+
+def confirm_whatsapp_verification(verification_id: int, user_id: int, telefone: str) -> None:
+    """Consome o código e grava o número como WhatsApp verificado do usuário."""
+    with get_pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE whatsapp_verifications SET used_at = now() WHERE id = %s",
+                (verification_id,),
+            )
+            cur.execute(
+                """UPDATE users SET whatsapp = %s, whatsapp_verificado_em = now(),
+                                    updated_at = now() WHERE id = %s""",
+                (telefone, user_id),
+            )
+
+
+def mark_whatsapp_verified(user_id: int) -> None:
+    """Marca como verificado sem código (contas semeadas pela equipe)."""
+    execute(
+        """UPDATE users SET whatsapp_verificado_em = COALESCE(whatsapp_verificado_em, now()),
+                            updated_at = now() WHERE id = %s""",
+        (user_id,),
+    )
+
+
+def set_user_whatsapp(user_id: int, telefone: str) -> None:
+    """Troca o número (ainda não verificado) informado pelo usuário."""
+    execute(
+        """UPDATE users SET whatsapp = %s, whatsapp_verificado_em = NULL, updated_at = now()
+            WHERE id = %s AND whatsapp_verificado_em IS NULL""",
+        (telefone, user_id),
+    )
+
+
 # --- Sessões --------------------------------------------------------------
 
 def create_session(user_id: int, token_hash: str, expires_at) -> None:
@@ -973,9 +1135,11 @@ def get_session(token_hash: str) -> dict | None:
     """Sessão válida (não expirada) + dados do usuário e tenant."""
     rows = query(
         """SELECT s.id, s.user_id, s.expires_at,
-                  u.tenant_id, u.email, u.nome, u.role, u.ativo, u.is_staff
+                  u.tenant_id, u.email, u.nome, u.role, u.ativo, u.is_staff,
+                  u.whatsapp, u.whatsapp_verificado_em
              FROM sessions s JOIN users u ON u.id = s.user_id
-            WHERE s.token_hash = %s AND s.expires_at > now() AND u.ativo = true""",
+            WHERE s.token_hash = %s AND s.expires_at > now() AND u.ativo = true
+              AND u.email_verificado_em IS NOT NULL""",
         (token_hash,),
     )
     return rows[0] if rows else None

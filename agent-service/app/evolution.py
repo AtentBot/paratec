@@ -149,20 +149,23 @@ def configurar_webhook(instancia: str) -> None:
     )
 
 
-def criar_instancia(instancia: str) -> dict:
+def criar_instancia(instancia: str, webhook: bool = True) -> dict:
     """Cria uma nova instância e devolve o QR Code inicial para pareamento.
 
-    Se o webhook estiver configurado, já o aponta para o N8N (best-effort, para
-    não travar a exibição do QR caso a rota de webhook varie entre versões)."""
+    Com `webhook`, já o aponta para o N8N (best-effort, para não travar a
+    exibição do QR caso a rota de webhook varie entre versões). Instâncias da
+    plataforma (ex.: envio de códigos de verificação) são criadas SEM webhook,
+    para que respostas a esse número não caiam no agente de nenhum cliente."""
     data = _manage(
         "POST",
         "/instance/create",
         json={"instanceName": instancia, "integration": "WHATSAPP-BAILEYS", "qrcode": True},
     )
-    try:
-        configurar_webhook(instancia)
-    except EvolutionError:
-        pass
+    if webhook:
+        try:
+            configurar_webhook(instancia)
+        except EvolutionError:
+            pass
     return _extrair_qr(data)
 
 

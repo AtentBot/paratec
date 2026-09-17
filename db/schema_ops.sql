@@ -247,6 +247,48 @@ CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
 -- Staff da plataforma (equipe Dew): acesso cross-tenant à central admin.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_staff BOOLEAN NOT NULL DEFAULT false;
 
+-- Verificação de e-mail: sem ela o usuário não faz login nem mantém sessão.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verificado_em TIMESTAMPTZ;
+
+-- Tokens de verificação (guardamos só o SHA-256; uso único; expiram).
+CREATE TABLE IF NOT EXISTS email_verifications (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash  TEXT NOT NULL UNIQUE,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    used_at     TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_email_verif_user ON email_verifications(user_id, created_at DESC);
+
+-- Verificação de WhatsApp (código de 6 dígitos enviado pela Evolution). O número
+-- verificado é o canal oficial do cliente; um número só confirma UMA conta.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_verificado_em TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_whatsapp_verificado
+    ON users(whatsapp) WHERE whatsapp_verificado_em IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS whatsapp_verifications (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    telefone    TEXT NOT NULL,
+    code_hash   TEXT NOT NULL,
+    tentativas  INT NOT NULL DEFAULT 0,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    used_at     TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_verif_user ON whatsapp_verifications(user_id, created_at DESC);
+
+-- Configurações da PLATAFORMA (não de tenant), editadas na central admin.
+-- Ex.: whatsapp_verificacao_instancia = instância Evolution que envia os códigos.
+CREATE TABLE IF NOT EXISTS platform_settings (
+    chave       TEXT PRIMARY KEY,
+    valor       TEXT,
+    updated_by  BIGINT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- 3) Sessões (cookie opaco; guardamos só o SHA-256 do token) ------------------
 CREATE TABLE IF NOT EXISTS sessions (
     id           BIGSERIAL PRIMARY KEY,
@@ -274,6 +316,16 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_tenant   ON subscriptions(tenant_id);
 CREATE INDEX        IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id);
+
+-- Backfill das verificações (e-mail e WhatsApp): contas que já operam (tenant
+-- com assinatura) ou staff contam como verificadas. Cadastros novos passam pelo
+-- link do e-mail e pelo código do WhatsApp.
+UPDATE users u SET email_verificado_em = u.created_at
+ WHERE u.email_verificado_em IS NULL
+   AND (u.is_staff OR EXISTS (SELECT 1 FROM subscriptions s WHERE s.tenant_id = u.tenant_id));
+UPDATE users u SET whatsapp_verificado_em = u.created_at
+ WHERE u.whatsapp_verificado_em IS NULL AND u.whatsapp IS NULL
+   AND (u.is_staff OR EXISTS (SELECT 1 FROM subscriptions s WHERE s.tenant_id = u.tenant_id));
 
 -- 4b) Pesquisa de cancelamento (5 perguntas + relato do cliente) --------------
 CREATE TABLE IF NOT EXISTS cancellation_feedback (

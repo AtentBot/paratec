@@ -1,15 +1,17 @@
 "use client";
 
 import { api } from "@/lib/api";
+import { MailCheck } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ReenviarVerificacao } from "../_components/reenviar-verificacao";
 
 export default function CadastroPage() {
-  const router = useRouter();
+  const [enviadoPara, setEnviadoPara] = useState<string | null>(null);
   const [empresa, setEmpresa] = useState("");
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
   const [senha, setSenha] = useState("");
   const [aceite, setAceite] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -24,29 +26,42 @@ export default function CadastroPage() {
     setErro(null);
     setCarregando(true);
     try {
-      await api.signup({ empresa, email, senha, nome: nome || undefined });
-      // Se veio de um plano (?plano=), já manda pro checkout; senão, pro painel.
-      const plano = new URLSearchParams(window.location.search).get("plano");
-      if (plano) {
-        try {
-          const { url } = await api.checkout(plano);
-          window.location.href = url;
-          return;
-        } catch {
-          router.push("/assinatura");
-          return;
-        }
-      }
-      router.push("/painel");
+      // Plano escolhido na landing (?plano=) segue no link do e-mail → checkout.
+      const plano = new URLSearchParams(window.location.search).get("plano") || undefined;
+      const r = await api.signup({ empresa, email, senha, whatsapp, nome: nome || undefined, plano });
+      setEnviadoPara(r.email);
+      setCarregando(false);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       setErro(
         msg.includes("409") ? "Já existe uma conta com este e-mail."
-          : msg.includes("400") ? "Verifique os dados: e-mail válido e senha de 8+ caracteres."
+          : msg.includes("400") ? "Verifique os dados: e-mail válido, WhatsApp com DDD e senha de 8+ caracteres."
           : "Não foi possível criar a conta. Tente novamente.",
       );
       setCarregando(false);
     }
+  }
+
+  if (enviadoPara) {
+    const plano = new URLSearchParams(window.location.search).get("plano");
+    return (
+      <div className="mx-auto flex w-full max-w-md flex-col items-center px-6 py-20 text-center">
+        <MailCheck size={48} className="text-accent-ink" />
+        <h1 className="mt-4 text-2xl font-bold tracking-tight text-ink">Confirme seu e-mail</h1>
+        <p className="mt-2 text-muted">
+          Enviamos um link de confirmação para <span className="font-medium text-ink">{enviadoPara}</span>.
+          Abra o e-mail e clique no link para continuar: em seguida você valida seu WhatsApp,
+          escolhe o plano e cadastra o cartão para liberar o painel.
+        </p>
+        <div className="mt-6">
+          <ReenviarVerificacao email={enviadoPara} plano={plano} />
+        </div>
+        <p className="mt-6 text-sm text-muted">
+          Já confirmou?{" "}
+          <Link href="/login" className="font-semibold text-accent-ink hover:underline">Entrar</Link>
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -78,6 +93,16 @@ export default function CadastroPage() {
             className="rounded-lg border bg-surface px-3 py-2.5 text-ink outline-none focus:ring-2 focus:ring-accent/40"
             placeholder="voce@empresa.com"
           />
+        </label>
+        <label className="flex flex-col gap-1.5 text-sm">
+          <span className="font-medium text-ink">WhatsApp</span>
+          <input
+            type="tel" required inputMode="tel" autoComplete="tel" value={whatsapp}
+            onChange={(e) => setWhatsapp(e.target.value)}
+            className="rounded-lg border bg-surface px-3 py-2.5 text-ink outline-none focus:ring-2 focus:ring-accent/40"
+            placeholder="(11) 98765-4321"
+          />
+          <span className="text-xs text-faint">Vamos enviar um código para confirmar este número.</span>
         </label>
         <label className="flex flex-col gap-1.5 text-sm">
           <span className="font-medium text-ink">Senha</span>

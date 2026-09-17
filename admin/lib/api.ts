@@ -5,6 +5,7 @@ import type {
   AdminConsumoTenant,
   AdminOverview,
   AdminPlanos,
+  AdminWhatsappVerificacao,
   AdminTenant,
   AdminTicketDetalhe,
   AdminTicketResumo,
@@ -144,10 +145,24 @@ export const api = {
     send<{ email: string; nome: string | null; role: string; tenant_id: number }>(
       "POST", "/auth/login", { email, senha },
     ),
-  signup: (body: { empresa: string; email: string; senha: string; nome?: string }) =>
-    send<{ tenant: { id: number; nome: string; slug: string }; user: { email: string } }>(
-      "POST", "/auth/signup", body,
+  // Cadastro NÃO abre sessão: envia o link de confirmação por e-mail.
+  signup: (body: {
+    empresa: string; email: string; senha: string; whatsapp: string; nome?: string; plano?: string;
+  }) =>
+    send<{ verificacao_enviada: boolean; email: string }>("POST", "/auth/signup", body),
+  verificarEmail: (token: string) =>
+    send<{ email: string; nome: string | null; role: string; tenant_id: number }>(
+      "POST", "/auth/verify-email", { token },
     ),
+  reenviarVerificacao: (email: string, plano?: string) =>
+    send<{ ok: boolean }>("POST", "/auth/resend-verification", { email, plano }),
+  // Verificação do WhatsApp (código de 6 dígitos). Erros trazem o `detail`.
+  whatsappEnviarCodigo: (telefone?: string) =>
+    sendDetalhe<{ enviado: boolean; whatsapp: string; expira_em_min: number }>(
+      "POST", "/auth/whatsapp/send-code", telefone ? { telefone } : {},
+    ),
+  whatsappVerificar: (codigo: string) =>
+    sendDetalhe<{ verificado: boolean; whatsapp: string }>("POST", "/auth/whatsapp/verify", { codigo }),
   logout: () => send<{ ok: boolean }>("POST", "/auth/logout"),
   trocarSenha: (senha_atual: string, senha_nova: string) =>
     send<{ ok: boolean }>("POST", "/auth/change-password", { senha_atual, senha_nova }),
@@ -181,6 +196,19 @@ export const api = {
     get<{ items: AdminTenant[]; total: number }>(`/admin/tenants?${_qs(p)}`),
   adminSetAssinatura: (tenantId: number, body: { status: string; plan?: string }) =>
     send<AssinaturaStatus>("PATCH", `/admin/tenants/${tenantId}/assinatura`, body),
+  // WhatsApp da plataforma (envia os códigos de verificação do cadastro).
+  adminWaVerificacao: () => get<AdminWhatsappVerificacao>("/admin/whatsapp-verificacao"),
+  adminWaVerificacaoSincronizar: (nome: string) =>
+    sendDetalhe<{ nome: string; qrcode: WhatsappQrCode }>("POST", "/admin/whatsapp-verificacao", { nome }),
+  adminWaVerificacaoQrcode: () =>
+    get<{ nome: string; qrcode: WhatsappQrCode }>("/admin/whatsapp-verificacao/qrcode"),
+  adminWaVerificacaoStatus: () => get<WhatsappInstancia>("/admin/whatsapp-verificacao/status"),
+  adminWaVerificacaoTeste: (telefone: string) =>
+    sendDetalhe<{ enviado: boolean; whatsapp: string }>("POST", "/admin/whatsapp-verificacao/teste", { telefone }),
+  adminWaVerificacaoDesconectar: () =>
+    sendDetalhe<{ estado: string }>("POST", "/admin/whatsapp-verificacao/desconectar"),
+  adminWaVerificacaoRemover: () =>
+    sendDetalhe<{ removido: string }>("DELETE", "/admin/whatsapp-verificacao"),
   adminPlanos: () => get<AdminPlanos>("/admin/planos"),
   adminAlterarPreco: (plano: string, body: { preco: number; aplicar_existentes: boolean }) =>
     send<AdminPlanos>("PATCH", `/admin/planos/${plano}`, body),

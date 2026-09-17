@@ -33,7 +33,8 @@ requires_db = pytest.mark.skipif(not DB_OK, reason="Postgres indisponível")
 _TRUNCATE = (
     "TRUNCATE messages, events, queue_items, conversations, customers, "
     "broadcasts, sellers, agents, instances, usage_events, "
-    "cancellation_feedback, ticket_mensagens, tickets RESTART IDENTITY CASCADE"
+    "cancellation_feedback, ticket_mensagens, tickets, platform_settings "
+    "RESTART IDENTITY CASCADE"
 )
 
 

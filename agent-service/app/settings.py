@@ -89,6 +89,17 @@ class Settings(BaseSettings):
     # Cookie de sessão do painel.
     session_cookie_name: str = "atentbot_session"
     session_ttl_days: int = 30
+    # Verificação de e-mail no cadastro: validade do link e limite de reenvios.
+    email_verification_ttl_hours: int = 48
+    email_verification_max_por_hora: int = 5
+    # Verificação de WhatsApp no cadastro: código de 6 dígitos enviado por uma
+    # instância Evolution DA PLATAFORMA (número do AtentBot, nunca o de um cliente).
+    # Vazio com a Evolution configurada = envio indisponível (503).
+    whatsapp_verificacao_instancia: str = ""
+    whatsapp_codigo_ttl_min: int = 10
+    whatsapp_codigo_max_tentativas: int = 5
+    whatsapp_codigo_intervalo_seg: int = 60
+    whatsapp_codigo_max_por_hora: int = 5
     # Secure=false facilita o dev local em http; em produção deixe true.
     session_cookie_secure: bool = True
 
