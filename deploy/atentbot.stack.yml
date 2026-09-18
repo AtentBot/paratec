@@ -101,6 +101,10 @@ services:
     environment:
       AGENT_INTERNAL_URL: http://paratec-agent:8000
       NODE_ENV: production
+      # CSP: o painel publica a política em Report-Only por padrão (não bloqueia,
+      # só reporta violações no console). Depois de validar que não há violação
+      # real no painel, defina CSP_ENFORCE=true para passar a bloquear.
+      CSP_ENFORCE: ${CSP_ENFORCE:-false}
     networks:
       - app_network
       - traefik_public
