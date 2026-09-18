@@ -1158,12 +1158,22 @@ def metrics_unread(tenant: TenantCtx = Depends(require_active_subscription)):
 # Exportações CSV
 # =========================================================================
 
+def _csv_celula(v):
+    """Neutraliza injeção de fórmula (CSV/DDE): campos vindos do cliente (razão
+    social, resumo, nome…) que começam com =/+/-/@/| ou tab/CR viram fórmula
+    viva quando o lojista abre o export no Excel/LibreOffice. Prefixa com aspa
+    simples (padrão OWASP) para forçar o valor a ser texto."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "|", "\t", "\r"):
+        return "'" + v
+    return v
+
+
 def _csv(filename: str, colunas: list[str], linhas: list[dict]) -> Response:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(colunas)
     for r in linhas:
-        w.writerow([r.get(c, "") for c in colunas])
+        w.writerow([_csv_celula(r.get(c, "")) for c in colunas])
     return Response(
         content=buf.getvalue(),
         media_type="text/csv; charset=utf-8",
