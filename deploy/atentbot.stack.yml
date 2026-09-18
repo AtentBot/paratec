@@ -34,7 +34,7 @@ volumes:
 services:
   # Cérebro dos agentes (FastAPI + LangGraph). PRIVADO (sem Traefik).
   agent-service:
-    image: ${AGENT_IMAGE:-paratec/agent-service:674f359}
+    image: ${AGENT_IMAGE:-paratec/agent-service:0fe3557}
     environment:
       # Postgres operacional
       PGHOST: ${PGHOST}
