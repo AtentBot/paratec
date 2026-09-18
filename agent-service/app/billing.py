@@ -44,7 +44,7 @@ PLANOS = {
     },
 }
 
-STATUS_ATIVOS = {"active", "trialing"}
+STATUS_ATIVOS = {"active"}  # não há trial: só assinatura paga libera
 
 
 def _init_stripe():
@@ -85,7 +85,7 @@ def registrar_consumo(tenant_id: int, tipo: str, tokens: int, meta: dict | None 
 # --- Enforcement ----------------------------------------------------------
 
 def assinatura_ativa(tenant_id: int) -> bool:
-    """True se o tenant pode operar (assinatura active/trialing, ou past_due
+    """True se o tenant pode operar (assinatura active, ou past_due
     dentro da carência). Sem billing configurado, tudo é liberado (dev)."""
     if not settings.stripe_configured:
         return True

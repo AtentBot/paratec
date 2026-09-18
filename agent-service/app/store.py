@@ -1399,7 +1399,7 @@ def admin_overview() -> dict:
     return query(
         """SELECT
              (SELECT count(*) FROM tenants)                                             AS tenants,
-             (SELECT count(*) FROM subscriptions WHERE status IN ('active','trialing')) AS ativos,
+             (SELECT count(*) FROM subscriptions WHERE status = 'active')              AS ativos,
              (SELECT count(*) FROM tickets WHERE status IN ('aberto','em_andamento'))   AS chamados_abertos,
              (SELECT COALESCE(SUM(custo_estimado),0) FROM usage_events
                 WHERE created_at >= date_trunc('month', now()))                         AS consumo_mes

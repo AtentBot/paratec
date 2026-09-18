@@ -548,7 +548,7 @@ def suporte_status(ticket_id: int, req: TicketStatus,
 # =========================================================================
 
 _TICKET_STATUS = {"aberto", "em_andamento", "resolvido", "fechado"}
-_SUB_STATUS = {"active", "trialing", "past_due", "unpaid", "canceled", "incomplete"}
+_SUB_STATUS = {"active", "past_due", "unpaid", "canceled", "incomplete"}
 
 
 @app.get("/admin/overview")

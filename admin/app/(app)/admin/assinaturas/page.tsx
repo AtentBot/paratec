@@ -11,7 +11,6 @@ const LIMIT = 25;
 
 const SUB_STATUS: Record<string, { label: string; cls: string }> = {
   active: { label: "Ativa", cls: "bg-surface-2 text-success" },
-  trialing: { label: "Em teste", cls: "bg-surface-2 text-info" },
   past_due: { label: "Pendente", cls: "bg-warning/10 text-warning" },
   unpaid: { label: "Não paga", cls: "bg-warning/10 text-warning" },
   canceled: { label: "Cancelada", cls: "bg-surface-2 text-muted" },

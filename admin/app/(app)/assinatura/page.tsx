@@ -11,7 +11,6 @@ const brl = (v: number) =>
 
 const STATUS_LABEL: Record<string, string> = {
   active: "Ativa",
-  trialing: "Em teste",
   past_due: "Pagamento pendente",
   canceled: "Cancelada",
   unpaid: "Não paga",
