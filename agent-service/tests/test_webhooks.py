@@ -54,6 +54,7 @@ HOOK = {"id": 9, "tenant_id": 3, "url": "https://exemplo.com/hook", "segredo": "
 def registro(monkeypatch):
     feitos = []
     monkeypatch.setattr(webhooks, "validar_destino", lambda url: None)
+    monkeypatch.setattr(webhooks, "resolver_destino", lambda url: (None, None))
     monkeypatch.setattr(store, "registrar_entrega_webhook", lambda *a: feitos.append(a))
     return feitos
 
@@ -61,7 +62,7 @@ def registro(monkeypatch):
 def test_entrega_assinada_sucesso(monkeypatch, registro):
     enviados = []
 
-    def fake_post(url, corpo, headers):
+    def fake_post(url, corpo, headers, pin_ip=None):
         enviados.append((url, corpo, headers))
         return httpx.Response(200)
 
@@ -86,7 +87,7 @@ def test_entrega_assinada_sucesso(monkeypatch, registro):
     (httpx.ConnectError("recusado"), 3),
 ])
 def test_retry(monkeypatch, registro, resposta, tentativas):
-    def fake_post(*a):
+    def fake_post(*a, **k):
         if isinstance(resposta, Exception):
             raise resposta
         return resposta
@@ -153,10 +154,11 @@ def test_eventos_reais_e_autodesativacao(db, tid, monkeypatch):
 
     execute("TRUNCATE webhook_entregas, webhooks RESTART IDENTITY CASCADE")
     monkeypatch.setattr(webhooks, "validar_destino", lambda url: None)
+    monkeypatch.setattr(webhooks, "resolver_destino", lambda url: (None, None))
     recebidos = []
     status = {"code": 200}
 
-    def fake_post(url, corpo, headers):
+    def fake_post(url, corpo, headers, pin_ip=None):
         recebidos.append(json.loads(corpo)["evento"])
         return httpx.Response(status["code"])
 

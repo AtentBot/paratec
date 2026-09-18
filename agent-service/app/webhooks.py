@@ -109,35 +109,77 @@ def _ip_bloqueado(ip: str) -> bool:
     return not addr.is_global or addr.is_multicast
 
 
-def validar_destino(url: str) -> str | None:
-    """Retorna None se o destino é aceitável; senão, o motivo (texto)."""
+def resolver_destino(url: str) -> tuple[str | None, str | None]:
+    """Valida o destino e devolve (ip_para_pin, motivo).
+
+    - motivo != None  -> destino recusado (não entregar).
+    - (ip, None)       -> ok; conecte PINANDO esse IP já validado (fecha o
+                          DNS-rebinding/TOCTOU: nada de re-resolver na hora).
+    - (None, None)     -> ok sem pin (modo dev: rede privada liberada).
+    """
     try:
         partes = urlsplit(url)
     except ValueError:
-        return "URL inválida"
+        return None, "URL inválida"
     if partes.scheme != "https":
-        return "use uma URL https://"
+        return None, "use uma URL https://"
     if not partes.hostname:
-        return "URL sem host"
+        return None, "URL sem host"
     if partes.username or partes.password:
-        return "não inclua usuário/senha na URL"
+        return None, "não inclua usuário/senha na URL"
     if settings.webhook_permitir_rede_privada:
-        return None
+        return None, None  # dev: sem checagem de IP e sem pin
     try:
         infos = socket.getaddrinfo(partes.hostname, partes.port or 443, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError):
-        return "não foi possível resolver o host"
-    ips = {i[4][0] for i in infos}
+        return None, "não foi possível resolver o host"
+    ips = [i[4][0] for i in infos]
     if not ips or any(_ip_bloqueado(ip) for ip in ips):
-        return "destino em rede privada/interna não é permitido"
-    return None
+        return None, "destino em rede privada/interna não é permitido"
+    # Todos os IPs resolvidos são públicos: fixa o 1º para a conexão.
+    return ips[0], None
+
+
+def validar_destino(url: str) -> str | None:
+    """Só o motivo (None se aceitável). Usado na validação em tempo de cadastro."""
+    return resolver_destino(url)[1]
 
 
 # =========================================================================
 # Entrega
 # =========================================================================
 
-def _post(url: str, corpo: bytes, headers: dict) -> httpx.Response:
+try:  # pin de IP opcional: se a API interna do httpcore mudar, cai p/ sem-pin
+    from httpcore._backends.sync import SyncBackend as _SyncBackend
+
+    class _PinnedBackend(_SyncBackend):
+        """Disca sempre no IP fixado; a camada TLS acima continua usando o
+        hostname da URL para SNI e verificação de certificado."""
+        def __init__(self, ip: str) -> None:
+            self._ip = ip
+            super().__init__()
+
+        def connect_tcp(self, host, port, timeout=None, local_address=None,
+                        socket_options=None):
+            return super().connect_tcp(self._ip, port, timeout=timeout,
+                                       local_address=local_address,
+                                       socket_options=socket_options)
+
+    _PIN_OK = True
+except Exception:  # pragma: no cover
+    _PIN_OK = False
+
+
+def _post(url: str, corpo: bytes, headers: dict, pin_ip: str | None = None) -> httpx.Response:
+    if pin_ip and _PIN_OK:
+        transport = httpx.HTTPTransport(verify=True)
+        try:
+            transport._pool._network_backend = _PinnedBackend(pin_ip)
+        except Exception:  # pragma: no cover — nunca quebrar a entrega pelo pin
+            transport = None
+        if transport is not None:
+            with httpx.Client(transport=transport, timeout=_TIMEOUT) as c:
+                return c.post(url, content=corpo, headers=headers, follow_redirects=False)
     return httpx.post(url, content=corpo, headers=headers, timeout=_TIMEOUT,
                       follow_redirects=False)
 
@@ -163,7 +205,7 @@ def entregar(hook: dict, payload: dict, tentativas: int = len(_BACKOFF)) -> dict
         if espera:
             time.sleep(espera)
         feitas += 1
-        motivo = validar_destino(hook["url"])  # revalida (DNS pode ter mudado)
+        pin_ip, motivo = resolver_destino(hook["url"])  # resolve+valida+pina numa etapa
         if motivo:
             erro, status_code = f"destino recusado: {motivo}", None
             break  # não adianta tentar de novo
@@ -177,7 +219,7 @@ def entregar(hook: dict, payload: dict, tentativas: int = len(_BACKOFF)) -> dict
             "X-AtentBot-Assinatura": assinar(hook["segredo"], ts, corpo),
         }
         try:
-            r = _post(hook["url"], corpo, headers)
+            r = _post(hook["url"], corpo, headers, pin_ip=pin_ip)
             status_code, erro = r.status_code, None
             if 200 <= r.status_code < 300:
                 break

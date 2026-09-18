@@ -81,6 +81,18 @@ _IMAGE_MIMES = {
 }
 
 
+def _sniff_imagem(data: bytes) -> str | None:
+    """Detecta o tipo real da imagem pelos magic bytes (ignora o content_type
+    declarado pelo cliente). None se não for JPG/PNG/WEBP."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def _media_file(nome: str) -> Path:
     """Resolve um arquivo dentro de MEDIA_DIR barrando path traversal."""
     p = (MEDIA_DIR / Path(nome).name).resolve()
@@ -1309,14 +1321,14 @@ def _run_broadcast(
 @app.post("/broadcast/upload")
 async def broadcast_upload(file: UploadFile = File(...),
                            tenant: TenantCtx = Depends(require_active_subscription)):
-    mime = (file.content_type or "").lower()
-    if mime not in _IMAGE_MIMES:
-        raise HTTPException(status_code=422, detail="use uma imagem JPG, PNG ou WEBP")
-    data = await file.read()
+    data = await _ler_upload_limitado(file, 5)
     if not data:
         raise HTTPException(status_code=422, detail="arquivo vazio")
-    if len(data) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="imagem acima de 5 MB")
+    # Valida pelo CONTEÚDO (magic bytes), não pelo content_type do cliente: um
+    # arquivo forjado não é gravado em /media sob um tipo de imagem.
+    mime = _sniff_imagem(data)
+    if mime not in _IMAGE_MIMES:
+        raise HTTPException(status_code=422, detail="envie uma imagem JPG, PNG ou WEBP válida")
     nome = f"promo-{uuid.uuid4().hex}{_IMAGE_MIMES[mime]}"
     _media_file(nome).write_bytes(data)
     return {"arquivo": nome, "url": f"/media/{nome}", "mimetype": mime}

@@ -17,12 +17,19 @@ from .settings import settings
 log = logging.getLogger("atentbot.mailer")
 
 
+def _h(v: str | None) -> str:
+    """Neutraliza CR/LF em valores de cabeçalho (defense-in-depth contra header
+    injection e para não deixar um assunto/e-mail com quebra silenciar o envio —
+    a policy 'default' do email levantaria ValueError)."""
+    return (v or "").replace("\r", " ").replace("\n", " ").strip()
+
+
 def _send_sync(to: str, subject: str, body: str, reply_to: str | None = None) -> None:
     msg = EmailMessage()
-    msg["From"] = f"{settings.smtp_from_name} <{settings.smtp_from_email}>"
-    msg["To"] = to
-    msg["Subject"] = subject
-    msg["Reply-To"] = reply_to or settings.reply_to
+    msg["From"] = f"{_h(settings.smtp_from_name)} <{_h(settings.smtp_from_email)}>"
+    msg["To"] = _h(to)
+    msg["Subject"] = _h(subject)
+    msg["Reply-To"] = _h(reply_to or settings.reply_to)
     msg.set_content(body)
 
     if settings.smtp_port == 465:
