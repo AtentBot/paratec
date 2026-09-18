@@ -125,6 +125,7 @@ def _webhook(monkeypatch, tipo, obj):
     monkeypatch.setattr(store, "confirmar_pack_purchase",
                         lambda cid, t, ate: capt.update(compra=cid, tenant=t, ate=ate) or {"id": cid})
     monkeypatch.setattr(store, "falhar_pack_purchase", lambda cid, t: capt.update(falhou=cid))
+    monkeypatch.setattr(billing, "retomar_conversas_da_cota", lambda t, desde: 0)
     monkeypatch.setattr(store, "log_event", lambda *a, **k: None)
     monkeypatch.setattr(store, "upsert_subscription",
                         lambda *a, **k: pytest.fail("pacote não mexe na assinatura"))
@@ -276,3 +277,36 @@ def test_editar_cota_e_pacote(db):
     k = next(x for x in p["pacotes"] if x["id"] == "p500")
     assert (k["nome"], k["mensagens"], k["preco"]) == ("+600 mensagens", 600, 45.5)
     billing.alterar_pacote("p500", mensagens=500, preco=39, ativo=None, alterado_por=None)
+
+
+def test_pacote_pago_retoma_conversas(monkeypatch):
+    feitos = []
+    monkeypatch.setattr(store, "get_subscription", lambda t: None)
+    monkeypatch.setattr(store, "confirmar_pack_purchase", lambda *a: {"id": 1})
+    monkeypatch.setattr(store, "log_event", lambda *a, **k: None)
+    monkeypatch.setattr(billing, "retomar_conversas_da_cota", lambda t, desde: feitos.append(t))
+    billing._confirmar_pacote(4, 1)
+    assert feitos == [4]
+    feitos.clear()
+    monkeypatch.setattr(store, "confirmar_pack_purchase", lambda *a: None)  # webhook repetido
+    billing._confirmar_pacote(4, 1)
+    assert feitos == []
+
+
+@requires_db
+def test_retoma_so_conversas_pausadas_pela_cota(db, tid):
+    inicio = AGORA - timedelta(minutes=1)
+    for th in ("so_cota", "equipe_respondeu", "handoff_normal", "ja_resolvida"):
+        db.upsert_conversation(tid, th, None, th, None)
+        db.set_status(tid, th, "humano")
+    for th in ("so_cota", "equipe_respondeu", "ja_resolvida"):
+        db.log_event(tid, "cota_esgotada", thread_id=th)
+    db.add_message(tid, "equipe_respondeu", "humano", "Oi, já te ajudo")
+    db.set_status(tid, "ja_resolvida", "resolvida")
+
+    assert billing.retomar_conversas_da_cota(tid, inicio) == 1
+    assert db.get_status(tid, "so_cota") == "ia"
+    assert db.get_status(tid, "equipe_respondeu") == "humano"
+    assert db.get_status(tid, "handoff_normal") == "humano"
+    assert db.get_status(tid, "ja_resolvida") == "resolvida"
+    assert billing.retomar_conversas_da_cota(tid, inicio) == 0   # idempotente

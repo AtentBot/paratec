@@ -1619,6 +1619,27 @@ def mensagens_ia_desde(tenant_id: int, inicio) -> int:
     )[0]["n"])
 
 
+def conversas_pausadas_pela_cota(tenant_id: int, desde) -> list[str]:
+    """Conversas que foram para a fila humana SÓ porque a cota acabou (evento
+    'cota_esgotada' no ciclo) e em que a equipe ainda não interveio (nenhuma
+    mensagem ou nota humana depois disso). São as que podem voltar para a IA."""
+    rows = query(
+        """SELECT c.thread_id
+             FROM conversations c
+             JOIN LATERAL (
+                   SELECT max(e.created_at) AS em FROM events e
+                    WHERE e.tenant_id = c.tenant_id AND e.thread_id = c.thread_id
+                      AND e.tipo = 'cota_esgotada' AND e.created_at >= %s) ev ON ev.em IS NOT NULL
+            WHERE c.tenant_id = %s AND c.status = 'humano'
+              AND NOT EXISTS (
+                   SELECT 1 FROM messages m
+                    WHERE m.tenant_id = c.tenant_id AND m.thread_id = c.thread_id
+                      AND m.role IN ('humano', 'nota') AND m.created_at > ev.em)""",
+        (desde, tenant_id),
+    )
+    return [r["thread_id"] for r in rows]
+
+
 def registrar_alerta_cota(tenant_id: int, periodo_inicio, nivel: int, limite: int) -> bool:
     """True só na 1ª vez que o nível é atingido no ciclo com esse limite (o aviso
     dispara uma vez; comprar pacote muda o limite e rearma o aviso)."""

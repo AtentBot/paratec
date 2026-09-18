@@ -388,10 +388,26 @@ def _pacote_do_evento(obj: dict) -> tuple[int, int] | None:
 
 
 def _confirmar_pacote(tenant_id: int, compra_id: int) -> None:
-    """Credita o pacote: vale até o fim do ciclo vigente no momento do pagamento."""
-    _, fim = periodo_cota(store.get_subscription(tenant_id))
+    """Credita o pacote: vale até o fim do ciclo vigente no momento do pagamento.
+    Com saldo de novo, devolve à IA as conversas pausadas só pela cota."""
+    inicio, fim = periodo_cota(store.get_subscription(tenant_id))
     if store.confirmar_pack_purchase(compra_id, tenant_id, fim):
         store.log_event(tenant_id, "pacote_mensagens_pago", meta={"compra_id": compra_id})
+        retomar_conversas_da_cota(tenant_id, inicio)
+
+
+def retomar_conversas_da_cota(tenant_id: int, desde: datetime) -> int:
+    """Volta para a IA as conversas que a cota esgotada mandou para a fila humana,
+    exceto aquelas em que a equipe já respondeu ou anotou algo. Best-effort."""
+    try:
+        threads = store.conversas_pausadas_pela_cota(tenant_id, desde)
+        for th in threads:
+            store.set_status(tenant_id, th, "ia")
+            store.log_event(tenant_id, "cota_retomada", thread_id=th)
+        return len(threads)
+    except Exception as e:  # pragma: no cover
+        log.warning("retomar conversas após pacote falhou: %s", e)
+        return 0
 
 
 def cancelar(tenant_id: int, respostas: dict | None = None, comentario: str | None = None) -> dict:

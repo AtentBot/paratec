@@ -47,6 +47,8 @@ Cada plano inclui N respostas da IA por ciclo (`plans.mensagens_incluidas`:
 Assinatura (pagamento único, pré-pago, válido até o fim do ciclo em que foi pago).
 Sem saldo, a IA não é chamada: o cliente final recebe `COTA_ESGOTADA_MENSAGEM` e a
 conversa vai para a fila humana. O dono da conta recebe e-mail em 80% e 100%.
+Quando um pacote é pago, as conversas pausadas só pela cota (sem mensagem ou nota
+da equipe depois disso) voltam para a IA sozinhas (evento `cota_retomada`).
 
 - **Nada a criar no Stripe:** o preço do pacote vai inline no Checkout
   (`price_data`), a partir da tabela `message_packs` (editável em `/admin/planos`,

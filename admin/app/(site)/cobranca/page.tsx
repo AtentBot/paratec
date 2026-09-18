@@ -71,7 +71,9 @@ export default function CobrancaPage() {
             Se as mensagens acabarem e nenhum pacote for comprado, a IA para de
             responder até a renovação. Cada cliente que escrever recebe um aviso de
             que um atendente vai continuar, e a conversa vai para a fila humana do
-            painel. Nenhum valor adicional é cobrado.
+            painel. Nenhum valor adicional é cobrado. Se um pacote for comprado
+            depois, as conversas em que sua equipe ainda não respondeu voltam
+            para a IA.
           </li>
         </ul>
 

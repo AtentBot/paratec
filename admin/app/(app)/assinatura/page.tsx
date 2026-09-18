@@ -280,7 +280,8 @@ function CotaMensagens({ uso, ocupado, onComprar }: {
             <p className="mt-4 flex items-start gap-2 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
               <AlertTriangle size={16} className="mt-0.5 shrink-0" />
               A IA parou de responder. Novas conversas estão indo para a fila humana até a
-              renovação ou até você comprar um pacote.
+              renovação. Se você comprar um pacote, as conversas em que sua equipe ainda não
+              respondeu voltam para a IA.
             </p>
           ) : alerta ? (
             <p className="mt-4 flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning">
