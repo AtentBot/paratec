@@ -9,13 +9,13 @@ export const metadata: Metadata = {
     "Plataforma de atendimento e vendas por IA no WhatsApp para distribuidores e PMEs.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   // Nonce da CSP (definido no middleware) para liberar o script inline do tema.
-  const nonce = headers().get("x-nonce") ?? undefined;
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <head>
