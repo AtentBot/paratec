@@ -3,7 +3,7 @@
 import { Restrito } from "@/components/restrito";
 import { Carregando } from "@/components/admin-ui";
 import { api } from "@/lib/api";
-import type { AdminPlano, AdminPlanos } from "@/lib/types";
+import type { AdminPacote, AdminPlano, AdminPlanos } from "@/lib/types";
 import { AlertTriangle, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -14,6 +14,8 @@ export default function AdminPlanosPage() {
   const [dados, setDados] = useState<AdminPlanos | null>(null);
   const [restrito, setRestrito] = useState(false);
   const [edit, setEdit] = useState<AdminPlano | null>(null);
+  const [editCota, setEditCota] = useState<AdminPlano | null>(null);
+  const [editPacote, setEditPacote] = useState<AdminPacote | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
 
   async function carregar() {
@@ -50,6 +52,8 @@ export default function AdminPlanosPage() {
               {brl(p.preco)}<span className="text-sm font-normal text-muted">/mês</span>
             </p>
             <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              <dt className="text-faint">Mensagens/mês</dt>
+              <dd className="tabular-nums text-muted">{(p.mensagens_incluidas ?? 0).toLocaleString("pt-BR")}</dd>
               <dt className="text-faint">Assinantes</dt>
               <dd className="tabular-nums text-muted">{p.assinantes}</dd>
               <dt className="text-faint">Price Stripe</dt>
@@ -57,13 +61,58 @@ export default function AdminPlanosPage() {
               <dt className="text-faint">Alterado</dt>
               <dd className="truncate text-muted">{p.updated_by ? `${dataHora(p.updated_at)} · ${p.updated_by}` : "—"}</dd>
             </dl>
-            <button onClick={() => { setAviso(null); setEdit(p); }}
-              className="mt-4 rounded-lg border px-3 py-2 text-sm font-medium text-ink hover:bg-surface-2">
-              Alterar preço
-            </button>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button onClick={() => { setAviso(null); setEdit(p); }}
+                className="rounded-lg border px-3 py-2 text-sm font-medium text-ink hover:bg-surface-2">
+                Alterar preço
+              </button>
+              <button onClick={() => { setAviso(null); setEditCota(p); }}
+                className="rounded-lg border px-3 py-2 text-sm font-medium text-ink hover:bg-surface-2">
+                Alterar cota
+              </button>
+            </div>
           </div>
         ))}
       </div>
+
+      <section>
+        <h3 className="text-sm font-semibold text-ink">Pacotes de mensagens</h3>
+        <p className="mb-3 text-xs text-muted">
+          Compra avulsa e pré-paga, válida até o fim do ciclo do cliente. O preço vai direto no
+          checkout: alterar aqui vale para as próximas compras.
+        </p>
+        <div className="overflow-x-auto rounded-2xl border bg-surface shadow-card">
+          <table className="w-full min-w-[640px] text-sm">
+            <thead>
+              <tr className="border-b text-left text-[11px] uppercase tracking-wider text-faint">
+                <th className="px-4 py-3">Pacote</th>
+                <th className="px-4 py-3 text-right">Mensagens</th>
+                <th className="px-4 py-3 text-right">Preço</th>
+                <th className="px-4 py-3 text-right">Por mensagem</th>
+                <th className="px-4 py-3">Situação</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {(dados.pacotes ?? []).map((k) => (
+                <tr key={k.id} className="border-b last:border-0">
+                  <td className="px-4 py-3 text-ink">{k.nome}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-muted">{k.mensagens.toLocaleString("pt-BR")}</td>
+                  <td className="px-4 py-3 text-right tabular-nums font-medium text-ink">{brl(k.preco)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-muted">{brl(k.preco / k.mensagens)}</td>
+                  <td className="px-4 py-3 text-muted">{k.ativo ? "À venda" : "Oculto"}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button onClick={() => { setAviso(null); setEditPacote(k); }}
+                      className="rounded-lg border px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-2">
+                      Editar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <section>
         <h3 className="mb-3 text-sm font-semibold text-ink">Histórico de alterações</h3>
@@ -102,6 +151,23 @@ export default function AdminPlanosPage() {
         )}
       </section>
 
+      {editCota && (
+        <AlterarCota
+          plano={editCota}
+          onClose={() => setEditCota(null)}
+          onDone={(r, n) => {
+            setDados(r);
+            setAviso(`${editCota.nome} agora inclui ${n.toLocaleString("pt-BR")} mensagens por ciclo, para todos os assinantes.`);
+          }}
+        />
+      )}
+      {editPacote && (
+        <EditarPacote
+          pacote={editPacote}
+          onClose={() => setEditPacote(null)}
+          onDone={(r) => { setDados(r); setAviso("Pacote atualizado. Vale para as próximas compras."); }}
+        />
+      )}
       {edit && (
         <AlterarPreco
           plano={edit}
@@ -194,5 +260,133 @@ function AlterarPreco({ plano, stripe, onClose, onDone }: {
         </div>
       </div>
     </div>
+  );
+}
+
+// Aceita "1.690,50" (pt-BR) e "1690.50".
+const parseValor = (v: string) => {
+  const t = v.trim();
+  return Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t);
+};
+const parseInteiro = (v: string) => Number(v.replace(/\D/g, "") || NaN);
+
+function Modal({ titulo, sub, busy, onClose, children }: {
+  titulo: string; sub: string; busy: boolean; onClose: () => void; children: React.ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={busy ? undefined : onClose} />
+      <div className="relative z-10 w-full max-w-md rounded-2xl border bg-surface p-6 shadow-lift">
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">{titulo}</h2>
+            <p className="text-xs text-muted">{sub}</p>
+          </div>
+          <button onClick={onClose} disabled={busy} className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-ink"><X size={16} /></button>
+        </div>
+        <div className="mt-4 flex flex-col gap-3">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Acoes({ busy, valido, rotulo, erro, onClose, onSalvar }: {
+  busy: boolean; valido: boolean; rotulo: string; erro: string | null; onClose: () => void; onSalvar: () => void;
+}) {
+  return (
+    <>
+      {erro && <p className="text-sm text-danger">{erro}</p>}
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} disabled={busy} className="rounded-lg border px-4 py-2 text-sm font-medium text-muted hover:text-ink">Cancelar</button>
+        <button onClick={onSalvar} disabled={busy || !valido}
+          className="inline-flex items-center gap-2 rounded-lg bg-feature px-4 py-2 text-sm font-semibold text-feature-fg transition hover:opacity-90 disabled:opacity-50">
+          {busy && <Loader2 size={15} className="animate-spin" />} {rotulo}
+        </button>
+      </div>
+    </>
+  );
+}
+
+const inputCls = "mt-1 w-full rounded-lg border bg-surface px-3 py-2.5 tabular-nums text-ink outline-none focus:ring-2 focus:ring-accent/40";
+
+function AlterarCota({ plano, onClose, onDone }: {
+  plano: AdminPlano; onClose: () => void; onDone: (r: AdminPlanos, n: number) => void;
+}) {
+  const [valor, setValor] = useState(String(plano.mensagens_incluidas));
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const n = parseInteiro(valor);
+  const valido = Number.isInteger(n) && n >= 0 && n !== plano.mensagens_incluidas;
+
+  async function salvar() {
+    setBusy(true); setErro(null);
+    try {
+      onDone(await api.adminAlterarCota(plano.id, n), n);
+      onClose();
+    } catch {
+      setErro("Não foi possível salvar.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal titulo={`Cota — ${plano.nome}`} sub={`Atual: ${plano.mensagens_incluidas.toLocaleString("pt-BR")} mensagens por ciclo`} busy={busy} onClose={onClose}>
+      <label className="text-sm">
+        <span className="font-medium text-ink">Mensagens da IA incluídas por ciclo</span>
+        <input value={valor} onChange={(e) => setValor(e.target.value)} inputMode="numeric" autoFocus className={inputCls} />
+      </label>
+      <p className="text-xs text-faint">
+        Vale na hora para os {plano.assinantes} assinante(s) do plano, já no ciclo atual. Não muda nada no Stripe.
+      </p>
+      <Acoes busy={busy} valido={valido} rotulo="Salvar" erro={erro} onClose={onClose} onSalvar={salvar} />
+    </Modal>
+  );
+}
+
+function EditarPacote({ pacote, onClose, onDone }: {
+  pacote: AdminPacote; onClose: () => void; onDone: (r: AdminPlanos) => void;
+}) {
+  const [mensagens, setMensagens] = useState(String(pacote.mensagens));
+  const [preco, setPreco] = useState(String(pacote.preco).replace(".", ","));
+  const [ativo, setAtivo] = useState(pacote.ativo);
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const n = parseInteiro(mensagens);
+  const v = parseValor(preco);
+  const valido = Number.isInteger(n) && n > 0 && Number.isFinite(v) && v > 0
+    && (n !== pacote.mensagens || Math.round(v * 100) !== Math.round(pacote.preco * 100) || ativo !== pacote.ativo);
+
+  async function salvar() {
+    setBusy(true); setErro(null);
+    try {
+      onDone(await api.adminAlterarPacote(pacote.id, { mensagens: n, preco: v, ativo }));
+      onClose();
+    } catch {
+      setErro("Não foi possível salvar.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal titulo={pacote.nome} sub={`Atual: ${pacote.mensagens.toLocaleString("pt-BR")} mensagens por ${brl(pacote.preco)}`} busy={busy} onClose={onClose}>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-sm">
+          <span className="font-medium text-ink">Mensagens</span>
+          <input value={mensagens} onChange={(e) => setMensagens(e.target.value)} inputMode="numeric" className={inputCls} />
+        </label>
+        <label className="text-sm">
+          <span className="font-medium text-ink">Preço (R$)</span>
+          <input value={preco} onChange={(e) => setPreco(e.target.value)} inputMode="decimal" className={inputCls} />
+        </label>
+      </div>
+      <label className="flex items-center gap-2 text-sm text-muted">
+        <input type="checkbox" checked={ativo} onChange={(e) => setAtivo(e.target.checked)} />
+        À venda no painel dos clientes
+      </label>
+      <p className="text-xs text-faint">
+        Quem já comprou mantém o que pagou. O nome exibido acompanha a quantidade.
+      </p>
+      <Acoes busy={busy} valido={valido} rotulo="Salvar" erro={erro} onClose={onClose} onSalvar={salvar} />
+    </Modal>
   );
 }

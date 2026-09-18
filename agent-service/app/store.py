@@ -1168,6 +1168,7 @@ def upsert_subscription(
     status: str | None = None,
     cancel_at_period_end: bool | None = None,
     current_period_end=None,
+    current_period_start=None,
 ) -> dict:
     """Cria/atualiza a assinatura do tenant (1 por tenant). COALESCE mantém os
     campos não informados."""
@@ -1175,8 +1176,9 @@ def upsert_subscription(
         """
         INSERT INTO subscriptions
             (tenant_id, stripe_subscription_id, stripe_customer_id, plan,
-             stripe_price_id, status, cancel_at_period_end, current_period_end)
-        VALUES (%s, %s, %s, %s, %s, COALESCE(%s,'incomplete'), COALESCE(%s,false), %s)
+             stripe_price_id, status, cancel_at_period_end, current_period_end,
+             current_period_start)
+        VALUES (%s, %s, %s, %s, %s, COALESCE(%s,'incomplete'), COALESCE(%s,false), %s, %s)
         ON CONFLICT (tenant_id) DO UPDATE SET
             stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, subscriptions.stripe_subscription_id),
             stripe_customer_id     = COALESCE(EXCLUDED.stripe_customer_id, subscriptions.stripe_customer_id),
@@ -1185,12 +1187,15 @@ def upsert_subscription(
             status                 = COALESCE(%s, subscriptions.status),
             cancel_at_period_end   = COALESCE(%s, subscriptions.cancel_at_period_end),
             current_period_end     = COALESCE(EXCLUDED.current_period_end, subscriptions.current_period_end),
+            current_period_start   = COALESCE(EXCLUDED.current_period_start, subscriptions.current_period_start),
             updated_at             = now()
         RETURNING tenant_id, stripe_subscription_id, stripe_customer_id, plan,
-                  stripe_price_id, status, cancel_at_period_end, current_period_end
+                  stripe_price_id, status, cancel_at_period_end, current_period_end,
+                  current_period_start
         """,
         (tenant_id, stripe_subscription_id, stripe_customer_id, plan, stripe_price_id,
-         status, cancel_at_period_end, current_period_end, status, cancel_at_period_end),
+         status, cancel_at_period_end, current_period_end, current_period_start,
+         status, cancel_at_period_end),
         returning=True,
     )
     return rows[0]
@@ -1199,7 +1204,8 @@ def upsert_subscription(
 def get_subscription(tenant_id: int) -> dict | None:
     rows = query(
         """SELECT tenant_id, stripe_subscription_id, stripe_customer_id, plan,
-                  stripe_price_id, status, cancel_at_period_end, current_period_end
+                  stripe_price_id, status, cancel_at_period_end, current_period_end,
+                  current_period_start
              FROM subscriptions WHERE tenant_id = %s""",
         (tenant_id,),
     )
@@ -1434,7 +1440,7 @@ def admin_set_subscription(tenant_id: int, status: str, plan: str | None = None)
 # --- Planos (preço base parametrizável) -----------------------------------
 
 _PLAN_COLS = """id, nome, preco::float AS preco, descricao, ordem, stripe_product_id,
-                stripe_price_id, updated_by, updated_at"""
+                stripe_price_id, mensagens_incluidas, updated_by, updated_at"""
 
 
 def list_plans() -> list[dict]:
@@ -1519,6 +1525,117 @@ def contagem_assinantes_por_plano() -> dict[str, int]:
             GROUP BY plan"""
     )
     return {r["plan"]: int(r["n"]) for r in rows}
+
+
+def set_plan_mensagens(plan_id: str, mensagens: int, alterado_por: str | None) -> dict | None:
+    execute(
+        """UPDATE plans SET mensagens_incluidas = %s, updated_by = %s, updated_at = now()
+            WHERE id = %s""",
+        (int(mensagens), alterado_por, plan_id),
+    )
+    return get_plan(plan_id)
+
+
+# --- Cota de mensagens + pacotes avulsos ----------------------------------
+
+_PACK_COLS = "id, nome, mensagens, preco::float AS preco, ativo, ordem, updated_by, updated_at"
+
+
+def list_message_packs(apenas_ativos: bool = True) -> list[dict]:
+    where = "WHERE ativo" if apenas_ativos else ""
+    return query(f"SELECT {_PACK_COLS} FROM message_packs {where} ORDER BY ordem, mensagens")
+
+
+def get_message_pack(pack_id: str) -> dict | None:
+    rows = query(f"SELECT {_PACK_COLS} FROM message_packs WHERE id = %s", (pack_id,))
+    return rows[0] if rows else None
+
+
+def update_message_pack(pack_id: str, *, nome: str | None, mensagens: int | None,
+                        preco: float | None, ativo: bool | None,
+                        alterado_por: str | None) -> dict | None:
+    execute(
+        """UPDATE message_packs SET
+               nome = COALESCE(%s, nome), mensagens = COALESCE(%s, mensagens),
+               preco = COALESCE(%s, preco), ativo = COALESCE(%s, ativo),
+               updated_by = %s, updated_at = now()
+            WHERE id = %s""",
+        (nome, mensagens, preco, ativo, alterado_por, pack_id),
+    )
+    return get_message_pack(pack_id)
+
+
+def create_pack_purchase(tenant_id: int, pack: dict, comprado_por: str | None) -> int:
+    rows = execute(
+        """INSERT INTO message_pack_purchases (tenant_id, pack_id, mensagens, preco, comprado_por)
+           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+        (tenant_id, pack["id"], int(pack["mensagens"]), pack["preco"], comprado_por),
+        returning=True,
+    )
+    return int(rows[0]["id"])
+
+
+def set_pack_purchase_session(purchase_id: int, session_id: str) -> None:
+    execute("UPDATE message_pack_purchases SET stripe_session_id = %s WHERE id = %s",
+            (session_id, purchase_id))
+
+
+def confirmar_pack_purchase(purchase_id: int, tenant_id: int, valido_ate) -> dict | None:
+    """Marca como pago (idempotente: só a 1ª confirmação grava a validade)."""
+    rows = execute(
+        """UPDATE message_pack_purchases SET status = 'pago', pago_em = now(), valido_ate = %s
+            WHERE id = %s AND tenant_id = %s AND status IN ('pendente','falhou')
+        RETURNING id, tenant_id, mensagens, valido_ate""",
+        (valido_ate, purchase_id, tenant_id), returning=True,
+    )
+    return rows[0] if rows else None
+
+
+def falhar_pack_purchase(purchase_id: int, tenant_id: int) -> None:
+    execute(
+        """UPDATE message_pack_purchases SET status = 'falhou'
+            WHERE id = %s AND tenant_id = %s AND status = 'pendente'""",
+        (purchase_id, tenant_id),
+    )
+
+
+def pacotes_validos(tenant_id: int) -> list[dict]:
+    """Pacotes pagos ainda dentro da validade (somam à cota do ciclo)."""
+    return query(
+        """SELECT id, pack_id, mensagens, preco::float AS preco, pago_em, valido_ate
+             FROM message_pack_purchases
+            WHERE tenant_id = %s AND status = 'pago' AND valido_ate > now()
+            ORDER BY pago_em""",
+        (tenant_id,),
+    )
+
+
+def mensagens_ia_desde(tenant_id: int, inicio) -> int:
+    """Respostas da IA (eventos de consumo 'chat') a partir de `inicio`."""
+    return int(query(
+        """SELECT count(*) AS n FROM usage_events
+            WHERE tenant_id = %s AND tipo = 'chat' AND created_at >= %s""",
+        (tenant_id, inicio),
+    )[0]["n"])
+
+
+def registrar_alerta_cota(tenant_id: int, periodo_inicio, nivel: int, limite: int) -> bool:
+    """True só na 1ª vez que o nível é atingido no ciclo com esse limite (o aviso
+    dispara uma vez; comprar pacote muda o limite e rearma o aviso)."""
+    rows = execute(
+        """INSERT INTO message_quota_alerts (tenant_id, periodo_inicio, nivel, limite)
+           VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING nivel""",
+        (tenant_id, periodo_inicio, nivel, limite), returning=True,
+    )
+    return bool(rows)
+
+
+def emails_owners(tenant_id: int) -> list[str]:
+    rows = query(
+        "SELECT email FROM users WHERE tenant_id = %s AND role = 'owner' AND ativo ORDER BY id",
+        (tenant_id,),
+    )
+    return [r["email"] for r in rows]
 
 
 def _ticket_filtros(status, prioridade, q) -> tuple[str, list]:

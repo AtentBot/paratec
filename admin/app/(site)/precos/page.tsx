@@ -42,9 +42,9 @@ export default function PrecosPage() {
         <h1 className="text-3xl font-bold tracking-tight text-ink">Planos</h1>
         <p className="mt-2 text-muted">Assinatura mensal via Stripe. Sem trial, sem fidelidade.</p>
         <p className="mx-auto mt-1 max-w-xl text-sm text-faint">
-          Você paga a <strong className="text-muted">mensalidade do plano</strong> +{" "}
-          <strong className="text-muted">consumo</strong> (indexação de documentos e conversas
-          da IA), medido por uso. Veja as{" "}
+          A <strong className="text-muted">mensalidade</strong> já inclui as mensagens da IA do
+          mês. Precisou de mais? Compre um <strong className="text-muted">pacote extra</strong>{" "}
+          no painel, com pagamento único. Veja as{" "}
           <Link href="/cobranca" className="text-accent-ink hover:underline">regras de cobrança</Link>.
         </p>
       </div>

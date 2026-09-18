@@ -84,7 +84,7 @@ export default function AtivarPage() {
             : `Olá${me.nome ? `, ${me.nome}` : ""}! O acesso ao AtentBot é liberado assim que a assinatura de ${me.tenant.nome || "sua empresa"} for ativada.`}
         </p>
         <p className="mt-1 text-sm text-faint">
-          Pagamento com cartão pelo Stripe. Mensalidade do plano + consumo medido por uso. Sem
+          Pagamento com cartão pelo Stripe. A mensalidade inclui as mensagens da IA do mês; pacotes extras só se você quiser. Sem
           fidelidade. Veja as{" "}
           <Link href="/cobranca" target="_blank" className="text-accent-ink hover:underline">regras de cobrança</Link>.
         </p>

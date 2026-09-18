@@ -103,7 +103,7 @@ const TILES = [
   { rotulo: "Conversas hoje", valor: "38" },
   { rotulo: "Orçamentos", valor: "12" },
   { rotulo: "Resposta média", valor: "4 s" },
-  { rotulo: "Consumo do mês", valor: "R$ 84,20" },
+  { rotulo: "Mensagens da IA", valor: "612 de 1.000" },
 ];
 
 const LINHAS = [

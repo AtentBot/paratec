@@ -240,6 +240,10 @@ class CheckoutRequest(BaseModel):
     plano: str
 
 
+class PacoteCheckoutRequest(BaseModel):
+    pacote: str
+
+
 class CancelRequest(BaseModel):
     respostas: dict | None = None   # as 5 respostas da pesquisa
     comentario: str | None = None   # relato livre do cliente
@@ -268,6 +272,16 @@ class AdminSubReq(BaseModel):
 class AdminPlanoPrecoReq(BaseModel):
     preco: float
     aplicar_existentes: bool = False
+
+
+class AdminPlanoCotaReq(BaseModel):
+    mensagens_incluidas: int
+
+
+class AdminPacoteReq(BaseModel):
+    mensagens: int | None = None
+    preco: float | None = None
+    ativo: bool | None = None
 
 
 class AdminTicketReq(BaseModel):
@@ -404,8 +418,16 @@ def billing_status(tenant: TenantCtx = Depends(current_tenant)):
 
 @app.get("/billing/usage")
 def billing_usage(tenant: TenantCtx = Depends(current_tenant)):
-    """Consumo pay-per-use do mês (indexação + conversas)."""
+    """Cota de mensagens do ciclo + pacotes avulsos à venda."""
     return billing.uso(tenant.tenant_id)
+
+
+@app.post("/billing/pacotes/checkout")
+def billing_pacote_checkout(req: PacoteCheckoutRequest,
+                            tenant: TenantCtx = Depends(current_tenant)):
+    if tenant.role != "owner":
+        raise HTTPException(403, "apenas o responsável da conta pode comprar pacotes")
+    return {"url": billing.criar_checkout_pacote(tenant, req.pacote)}
 
 
 @app.post("/billing/checkout")
@@ -567,6 +589,27 @@ def admin_plano_preco(plano: str, req: AdminPlanoPrecoReq,
     if not (0 < req.preco <= 1_000_000):
         raise HTTPException(status_code=422, detail="preço inválido")
     return billing.alterar_preco(plano, req.preco, req.aplicar_existentes, admin.email)
+
+
+@app.patch("/admin/planos/{plano}/cota")
+def admin_plano_cota(plano: str, req: AdminPlanoCotaReq,
+                     admin: TenantCtx = Depends(current_admin)):
+    if plano not in billing.PLANOS:
+        raise HTTPException(status_code=404, detail="plano não encontrado")
+    if not (0 <= req.mensagens_incluidas <= 10_000_000):
+        raise HTTPException(status_code=422, detail="quantidade inválida")
+    return billing.alterar_cota(plano, req.mensagens_incluidas, admin.email)
+
+
+@app.patch("/admin/pacotes/{pacote}")
+def admin_pacote(pacote: str, req: AdminPacoteReq,
+                 admin: TenantCtx = Depends(current_admin)):
+    if req.mensagens is not None and not (0 < req.mensagens <= 10_000_000):
+        raise HTTPException(status_code=422, detail="quantidade inválida")
+    if req.preco is not None and not (0 < req.preco <= 1_000_000):
+        raise HTTPException(status_code=422, detail="preço inválido")
+    return billing.alterar_pacote(pacote, mensagens=req.mensagens, preco=req.preco,
+                                  ativo=req.ativo, alterado_por=admin.email)
 
 
 @app.get("/admin/consumo")

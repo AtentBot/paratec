@@ -6,12 +6,16 @@ Padrão (inspirado, sem acoplamento, em implementações .NET conhecidas):
 - Cancelamento = cancel_at_period_end (mantém acesso até o fim do período).
 - Enforcement: só tenant com assinatura ATIVA (com carência p/ past_due) acessa
   os endpoints operacionais e o bot.
+- Cota: cada plano inclui N respostas da IA por ciclo; acima disso o cliente
+  compra pacotes avulsos (Checkout mode=payment, pré-pago, válidos até o fim do
+  ciclo). Sem saldo, a IA para e a conversa vai para a fila humana.
 
 O estado é espelhado na tabela `subscriptions` (store.upsert_subscription); a
 Paratec tem uma assinatura "cortesia" semeada no schema, então nunca bloqueia.
 """
 from __future__ import annotations
 
+import calendar
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -27,15 +31,15 @@ log = logging.getLogger("atentbot.billing")
 # (editável na central admin); isto é só fallback se o banco estiver fora.
 PLANOS = {
     "essencial": {
-        "nome": "Essencial", "preco": 690,
+        "nome": "Essencial", "preco": 99, "mensagens_incluidas": 1000,
         "descricao": "1 número · 1 agente · catálogo até 500 SKUs · 3 usuários.",
     },
     "profissional": {
-        "nome": "Profissional", "preco": 1690,
+        "nome": "Profissional", "preco": 249, "mensagens_incluidas": 3000,
         "descricao": "Até 3 números · multi-agente · equipe · broadcast · 8 usuários.",
     },
     "escala": {
-        "nome": "Escala", "preco": 3900,
+        "nome": "Escala", "preco": 599, "mensagens_incluidas": 10000,
         "descricao": "Números ilimitados · WhatsApp API oficial · ERP · SLA.",
     },
 }
@@ -62,12 +66,12 @@ def _dt(ts) -> datetime | None:
     return datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
 
 
-# --- Medição + reporte de consumo (pay-per-use) ---------------------------
+# --- Medição de consumo (custo interno de tokens) --------------------------
 
 def registrar_consumo(tenant_id: int, tipo: str, tokens: int, meta: dict | None = None) -> dict:
-    """Registra o consumo (usage_events) e, se a cobrança metered estiver ligada,
-    reporta ao Stripe. Best-effort: nunca quebra o fluxo do agente/ingestão.
-    Retorna {tokens, custo_estimado}."""
+    """Registra o consumo de tokens (usage_events). O cliente não paga por token:
+    o evento 'chat' conta como 1 mensagem da cota e os tokens viram só custo
+    interno. Best-effort: nunca quebra o fluxo do agente/ingestão."""
     if tokens <= 0:
         return {"tokens": 0, "custo_estimado": 0.0}
     custo = settings.custo_tokens(tipo, tokens)
@@ -75,33 +79,7 @@ def registrar_consumo(tenant_id: int, tipo: str, tokens: int, meta: dict | None 
         store.record_usage(tenant_id, tipo, tokens, custo, meta)
     except Exception as e:  # pragma: no cover
         log.warning("record_usage falhou: %s", e)
-    _reportar_stripe(tenant_id, tipo, tokens)
     return {"tokens": tokens, "custo_estimado": custo}
-
-
-def _reportar_stripe(tenant_id: int, tipo: str, tokens: int) -> None:
-    """Envia um evento de medidor ao Stripe (Billing Meters). Só roda se metered
-    estiver configurado e o tenant tiver stripe_customer_id."""
-    if not settings.metered_enabled:
-        return
-    event_name = settings.meter_event_name(tipo)
-    if not event_name:
-        return
-    try:
-        import stripe
-
-        stripe.api_key = settings.stripe_secret_key
-        t = store.get_tenant(tenant_id)
-        cust = (t or {}).get("stripe_customer_id")
-        if not cust:
-            return  # sem customer no Stripe ainda (ex.: cortesia) — não reporta
-        # value = tokens; o preço metered define o valor por token (unit_amount_decimal).
-        stripe.billing.MeterEvent.create(
-            event_name=event_name,
-            payload={"stripe_customer_id": cust, "value": str(int(tokens))},
-        )
-    except Exception as e:  # pragma: no cover
-        log.warning("reporte de consumo ao Stripe falhou (%s): %s", event_name, e)
 
 
 # --- Enforcement ----------------------------------------------------------
@@ -177,62 +155,152 @@ def price_id_do_plano(plano: str, plano_db: dict | None = None) -> str | None:
     return (plano_db or {}).get("stripe_price_id") or settings.plan_prices.get(plano)
 
 
+def _incluidas(plano_db: dict) -> int:
+    n = plano_db.get("mensagens_incluidas")
+    return int(n) if n is not None else PLANOS.get(plano_db["id"], {}).get("mensagens_incluidas", 0)
+
+
+def _mensagens_do_plano(plano: str | None) -> int:
+    pid = plano if plano in PLANOS else "essencial"
+    try:
+        p = store.get_plan(pid)
+    except Exception:  # pragma: no cover
+        p = None
+    return _incluidas(p or {"id": pid})
+
+
 def planos() -> list[dict]:
     """Planos com o preço vigente (só 'disponivel' os que têm price id no Stripe)."""
     return [
         {
             "id": p["id"], "nome": p["nome"], "preco": float(p["preco"]),
             "descricao": p.get("descricao") or "",
+            "mensagens_incluidas": _incluidas(p),
             "disponivel": bool(price_id_do_plano(p["id"], p)),
         }
         for p in _planos_db()
     ]
 
 
-def uso(tenant_id: int) -> dict:
-    """Consumo pay-per-use do mês corrente (tokens + custo estimado em BRL) +
-    eventos recentes + as tarifas usadas. Hoje é 'medir e mostrar' (não cobrado
-    automaticamente ainda)."""
-    from datetime import datetime, timezone
+# --- Cota de mensagens ------------------------------------------------------
 
-    resumo = store.usage_periodo(tenant_id)
-    LABELS = {
-        "chat": "Conversas (IA)",
-        "rag_ingest_documento": "Indexação de documentos",
-        "rag_ingest_catalogo": "Indexação de catálogo",
-    }
-    por_tipo = [
-        {**t, "label": LABELS.get(t["tipo"], t["tipo"])}
-        for t in resumo.get("por_tipo", [])
-    ]
+def _menos_um_mes(dt: datetime) -> datetime:
+    ano, mes = (dt.year, dt.month - 1) if dt.month > 1 else (dt.year - 1, 12)
+    dia = min(dt.day, calendar.monthrange(ano, mes)[1])
+    return dt.replace(year=ano, month=mes, day=dia)
+
+
+def periodo_cota(sub: dict | None) -> tuple[datetime, datetime]:
+    """Janela da cota: o ciclo de cobrança vigente do Stripe. Sem ciclo conhecido,
+    deriva do fim do período (1 mês antes) e, em último caso, usa o mês civil."""
+    agora = datetime.now(timezone.utc)
+    ini, fim = (sub or {}).get("current_period_start"), (sub or {}).get("current_period_end")
+    if fim and fim > agora:
+        ini = ini or _menos_um_mes(fim)
+        if ini <= agora:
+            return ini, fim
+    ini = agora.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    prox = (ini.replace(year=ini.year + 1, month=1) if ini.month == 12
+            else ini.replace(month=ini.month + 1))
+    return ini, prox
+
+
+def cota(tenant_id: int) -> dict:
+    """Situação da cota no ciclo: incluídas no plano + pacotes válidos x usadas.
+    Ilimitada quando a cota está desligada, sem billing (dev) ou em assinatura
+    cortesia/manual (sem assinatura no Stripe, ex.: a Paratec)."""
+    sub = store.get_subscription(tenant_id)
+    inicio, fim = periodo_cota(sub)
+    ilimitado = (not settings.cota_mensagens_ativa or not settings.stripe_configured
+                 or not sub or not sub.get("stripe_subscription_id"))
+    incluidas = _mensagens_do_plano((sub or {}).get("plan"))
+    pacotes = store.pacotes_validos(tenant_id)
+    extra = sum(int(p["mensagens"]) for p in pacotes)
+    usadas = store.mensagens_ia_desde(tenant_id, inicio)
+    limite = incluidas + extra
     return {
-        "mes": datetime.now(timezone.utc).strftime("%Y-%m"),
-        "tokens": resumo["tokens"],
-        "custo": resumo["custo"],
-        "eventos": resumo["eventos"],
-        "por_tipo": por_tipo,
-        "recentes": store.usage_recentes(tenant_id, 15),
-        "cobranca_automatica": settings.metered_enabled,
-        "precos": {
-            "embedding_por_1k": settings.usage_preco_por_1k_tokens_embedding,
-            "chat_por_1k": settings.usage_preco_por_1k_tokens_chat,
-        },
+        "ilimitado": ilimitado,
+        "plano": (sub or {}).get("plan"),
+        "periodo_inicio": inicio,
+        "periodo_fim": fim,
+        "incluidas": incluidas,
+        "pacotes": extra,
+        "limite": limite,
+        "usadas": usadas,
+        "restantes": max(limite - usadas, 0),
+        "percentual": round(100 * usadas / limite, 1) if limite else 100.0,
+        "esgotada": not ilimitado and usadas >= limite,
+        "pacotes_ativos": pacotes,
+    }
+
+
+def pode_responder(tenant_id: int) -> bool:
+    """A IA ainda tem saldo de mensagens neste ciclo? Falha de leitura libera
+    (não derruba o atendimento por um erro de banco)."""
+    try:
+        return not cota(tenant_id)["esgotada"]
+    except Exception as e:  # pragma: no cover
+        log.warning("checagem de cota falhou (%s); libera", e)
+        return True
+
+
+_AVISOS = {
+    80: ("Você já usou 80% das mensagens do seu plano",
+         "Seu agente já respondeu {usadas} de {limite} mensagens neste ciclo "
+         "(renova em {fim}).\n\nSe precisar de mais antes disso, compre um pacote "
+         "extra em {link}."),
+    100: ("As mensagens do seu plano acabaram",
+          "Seu agente respondeu as {limite} mensagens deste ciclo. Até {fim}, as novas "
+          "conversas vão direto para a fila humana do painel.\n\nPara a IA voltar a "
+          "responder agora, compre um pacote extra em {link}."),
+}
+
+
+def verificar_alertas_cota(tenant_id: int) -> None:
+    """Avisa o responsável da conta por e-mail ao atingir 80% e 100% da cota
+    (uma vez por nível, ciclo e limite). Best-effort."""
+    try:
+        c = cota(tenant_id)
+        if c["ilimitado"] or not c["limite"]:
+            return
+        nivel = 100 if c["usadas"] >= c["limite"] else 80 if c["percentual"] >= 80 else 0
+        if not nivel or not store.registrar_alerta_cota(
+                tenant_id, c["periodo_inicio"], nivel, c["limite"]):
+            return
+        assunto, corpo = _AVISOS[nivel]
+        corpo = corpo.format(
+            usadas=f"{c['usadas']:,}".replace(",", "."), limite=f"{c['limite']:,}".replace(",", "."),
+            fim=c["periodo_fim"].strftime("%d/%m/%Y"),
+            link=f"{settings.panel_url.rstrip('/')}/assinatura",
+        )
+        from . import mailer
+
+        for email in store.emails_owners(tenant_id):
+            mailer.enviar(email, assunto, corpo)
+        store.log_event(tenant_id, f"cota_{nivel}")
+    except Exception as e:  # pragma: no cover
+        log.warning("aviso de cota falhou: %s", e)
+
+
+def uso(tenant_id: int) -> dict:
+    """Cota de mensagens do ciclo + pacotes à venda (tela Assinatura)."""
+    return {
+        **cota(tenant_id),
+        "pacotes_disponiveis": [
+            {"id": p["id"], "nome": p["nome"], "mensagens": int(p["mensagens"]),
+             "preco": float(p["preco"])}
+            for p in store.list_message_packs()
+        ],
     }
 
 
 # --- Checkout -------------------------------------------------------------
 
-def criar_checkout(tenant: TenantCtx, plano: str) -> str:
-    """Cria a Checkout Session (assinatura, SEM trial) e devolve a URL."""
-    stripe = _init_stripe()
-    price_id = price_id_do_plano(plano) if plano in PLANOS else None
-    if not price_id:
-        raise HTTPException(400, "plano inválido ou indisponível")
-
+def _garantir_customer(stripe, tenant: TenantCtx) -> str:
+    """Customer do Stripe do tenant (cria no 1º checkout)."""
     t = store.get_tenant(tenant.tenant_id)
     if not t:
         raise HTTPException(404, "tenant não encontrado")
-
     customer_id = t.get("stripe_customer_id")
     if not customer_id:
         cust = stripe.Customer.create(
@@ -242,24 +310,88 @@ def criar_checkout(tenant: TenantCtx, plano: str) -> str:
         )
         customer_id = cust["id"]
         store.set_tenant_stripe_customer(tenant.tenant_id, customer_id)
+    return customer_id
 
-    # Plano base (quantidade 1) + itens metered (consumo, sem quantity) quando a
-    # cobrança automática de extras está configurada.
-    line_items = [{"price": price_id, "quantity": 1}]
-    for mp in settings.metered_price_ids:
-        line_items.append({"price": mp})
 
+def criar_checkout(tenant: TenantCtx, plano: str) -> str:
+    """Cria a Checkout Session (assinatura, SEM trial) e devolve a URL."""
+    stripe = _init_stripe()
+    price_id = price_id_do_plano(plano) if plano in PLANOS else None
+    if not price_id:
+        raise HTTPException(400, "plano inválido ou indisponível")
+
+    customer_id = _garantir_customer(stripe, tenant)
     sess = stripe.checkout.Session.create(
         mode="subscription",
         customer=customer_id,
         client_reference_id=str(tenant.tenant_id),
-        line_items=line_items,
+        line_items=[{"price": price_id, "quantity": 1}],
         # SEM trial: omitimos subscription_data.trial_* → cobra a 1ª fatura já.
         subscription_data={"metadata": {"tenant_id": str(tenant.tenant_id)}},
         success_url=settings.billing_success_url,
         cancel_url=settings.billing_cancel_url,
     )
     return sess["url"]
+
+
+TIPO_PACOTE = "pacote_mensagens"
+
+
+def criar_checkout_pacote(tenant: TenantCtx, pack_id: str) -> str:
+    """Checkout de pagamento único (pré-pago) de um pacote de mensagens. O saldo
+    só entra quando o Stripe confirma o pagamento (webhook) e vale até o fim do
+    ciclo de cobrança em que foi pago."""
+    stripe = _init_stripe()
+    if not assinatura_ativa(tenant.tenant_id):
+        raise HTTPException(402, "subscription_required")
+    pack = store.get_message_pack(pack_id)
+    if not pack or not pack.get("ativo"):
+        raise HTTPException(400, "pacote inválido ou indisponível")
+
+    customer_id = _garantir_customer(stripe, tenant)
+    compra_id = store.create_pack_purchase(tenant.tenant_id, pack, tenant.email)
+    meta = {"tipo": TIPO_PACOTE, "tenant_id": str(tenant.tenant_id), "compra_id": str(compra_id)}
+    sess = stripe.checkout.Session.create(
+        mode="payment",
+        customer=customer_id,
+        client_reference_id=str(tenant.tenant_id),
+        line_items=[{
+            "quantity": 1,
+            "price_data": {
+                "currency": "brl",
+                "unit_amount": int(round(float(pack["preco"]) * 100)),
+                "product_data": {
+                    "name": f"AtentBot · {pack['nome']}",
+                    "description": "Mensagens extras da IA, válidas até o fim do ciclo atual da assinatura.",
+                },
+            },
+        }],
+        metadata=meta,
+        payment_intent_data={"metadata": meta},
+        success_url=settings.pacote_success_url,
+        cancel_url=settings.pacote_cancel_url,
+    )
+    sess = _plain(sess)
+    store.set_pack_purchase_session(compra_id, sess["id"])
+    return sess["url"]
+
+
+def _pacote_do_evento(obj: dict) -> tuple[int, int] | None:
+    meta = obj.get("metadata") or {}
+    if meta.get("tipo") != TIPO_PACOTE:
+        return None
+    try:
+        return int(meta["tenant_id"]), int(meta["compra_id"])
+    except (KeyError, TypeError, ValueError):
+        log.warning("webhook: pacote sem tenant/compra na metadata (%s)", obj.get("id"))
+        return None
+
+
+def _confirmar_pacote(tenant_id: int, compra_id: int) -> None:
+    """Credita o pacote: vale até o fim do ciclo vigente no momento do pagamento."""
+    _, fim = periodo_cota(store.get_subscription(tenant_id))
+    if store.confirmar_pack_purchase(compra_id, tenant_id, fim):
+        store.log_event(tenant_id, "pacote_mensagens_pago", meta={"compra_id": compra_id})
 
 
 def cancelar(tenant_id: int, respostas: dict | None = None, comentario: str | None = None) -> dict:
@@ -298,18 +430,20 @@ def planos_admin() -> dict:
     try:
         contagem = store.contagem_assinantes_por_plano()
         historico = store.plan_price_history(limit=30)
+        pacotes = store.list_message_packs(apenas_ativos=False)
     except Exception:  # pragma: no cover
-        contagem, historico = {}, []
+        contagem, historico, pacotes = {}, [], []
     itens = [
         {
             **p,
             "preco": float(p["preco"]),
             "stripe_price_id": price_id_do_plano(p["id"], p),
             "assinantes": contagem.get(p["id"], 0),
+            "mensagens_incluidas": _incluidas(p),
         }
         for p in _planos_db()
     ]
-    return {"items": itens, "historico": historico,
+    return {"items": itens, "historico": historico, "pacotes": pacotes,
             "stripe_configurado": settings.stripe_configured}
 
 
@@ -434,7 +568,9 @@ def _sync_subscription(sub_obj: dict) -> None:
     # API Stripe >= 2025-03 moveu current_period_end p/ os itens da assinatura.
     period_end = sub_obj.get("current_period_end") or max(
         (it.get("current_period_end") or 0 for it in items), default=0) or None
-    # O item do plano base é o que mapeia p/ um plano (os demais são metered).
+    period_start = sub_obj.get("current_period_start") or max(
+        (it.get("current_period_start") or 0 for it in items), default=0) or None
+    # O item do plano base é o que mapeia p/ um plano (assinaturas antigas ainda podem ter itens metered).
     price_id, plano = None, None
     for it in items:
         pid = it["price"]["id"]
@@ -453,7 +589,32 @@ def _sync_subscription(sub_obj: dict) -> None:
         status=sub_obj.get("status"),
         cancel_at_period_end=bool(sub_obj.get("cancel_at_period_end")),
         current_period_end=_dt(period_end),
+        current_period_start=_dt(period_start),
     )
+
+
+def alterar_cota(plano: str, mensagens: int, alterado_por: str | None) -> dict:
+    """Muda quantas mensagens o plano inclui por ciclo. Vale na hora para todos
+    os assinantes do plano (não mexe no Stripe)."""
+    if not store.get_plan(plano):
+        raise HTTPException(404, "plano não encontrado")
+    store.set_plan_mensagens(plano, mensagens, alterado_por)
+    return planos_admin()
+
+
+def alterar_pacote(pack_id: str, *, mensagens: int | None, preco: float | None,
+                   ativo: bool | None, alterado_por: str | None) -> dict:
+    """Edita um pacote avulso. O preço vai inline no checkout, então vale para as
+    próximas compras sem criar nada no Stripe."""
+    if not store.get_message_pack(pack_id):
+        raise HTTPException(404, "pacote não encontrado")
+    if preco is not None:
+        preco = int(round(preco * 100)) / 100
+    # O nome acompanha a quantidade ("+1.000 mensagens"), p/ nunca divergir dela.
+    nome = f"+{mensagens:,} mensagens".replace(",", ".") if mensagens else None
+    store.update_message_pack(pack_id, nome=nome, mensagens=mensagens, preco=preco,
+                              ativo=ativo, alterado_por=alterado_por)
+    return planos_admin()
 
 
 def processar_webhook(payload: bytes, sig_header: str | None) -> dict:
@@ -480,7 +641,16 @@ def processar_webhook(payload: bytes, sig_header: str | None) -> dict:
     tipo = event["type"]
     obj = event["data"]["object"]
 
-    if tipo == "checkout.session.completed":
+    pacote = _pacote_do_evento(obj) if tipo.startswith("checkout.session.") else None
+    if pacote:
+        # Pacote avulso (mode=payment). Cartão confirma no `completed`; Pix/boleto
+        # confirmam depois, no `async_payment_succeeded`.
+        if tipo in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+            if obj.get("payment_status") == "paid":
+                _confirmar_pacote(*pacote)
+        elif tipo == "checkout.session.async_payment_failed":
+            store.falhar_pack_purchase(pacote[1], pacote[0])
+    elif tipo == "checkout.session.completed":
         tenant_id = obj.get("client_reference_id")
         customer_id = obj.get("customer")
         sub_id = obj.get("subscription")

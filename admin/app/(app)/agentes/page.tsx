@@ -345,7 +345,7 @@ export default function AgentesPage() {
                 <span className="block text-[11px] text-muted">
                   O agente usa o histórico do cliente (perfil + últimos orçamentos/solicitações)
                   como contexto. Recomendado para vendas/orçamentos; dispensável para FAQ.
-                  Consumo de tokens é otimizado (contexto compacto e limitado).
+                  O contexto extra é compacto e limitado, e cada resposta continua contando uma mensagem.
                 </span>
               </span>
             </label>

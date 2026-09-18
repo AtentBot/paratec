@@ -29,6 +29,11 @@ export function PlanosGrid({
             )}
             <h3 className={"text-lg font-semibold " + (destaque ? "text-feature-fg" : "text-ink")}>{p.nome}</h3>
             <p className={"mt-1 text-sm " + (destaque ? "text-white/70" : "text-muted")}>{p.descricao}</p>
+            {p.mensagens_incluidas > 0 && (
+              <p className={"mt-3 text-sm font-medium " + (destaque ? "text-feature-fg" : "text-ink")}>
+                {p.mensagens_incluidas.toLocaleString("pt-BR")} mensagens da IA por mês
+              </p>
+            )}
             <div className="mt-5 flex items-end gap-1">
               <span className={"text-4xl font-bold " + (destaque ? "text-feature-fg" : "text-ink")}>
                 R$ {precoPlano(p.preco)}

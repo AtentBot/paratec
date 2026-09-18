@@ -552,9 +552,9 @@ CREATE TABLE IF NOT EXISTS plans (
 );
 
 INSERT INTO plans (id, nome, preco, descricao, ordem) VALUES
-    ('essencial',    'Essencial',    690,  '1 número · 1 agente · catálogo até 500 SKUs · 3 usuários.', 1),
-    ('profissional', 'Profissional', 1690, 'Até 3 números · multi-agente · equipe · broadcast · 8 usuários.', 2),
-    ('escala',       'Escala',       3900, 'Números ilimitados · WhatsApp API oficial · ERP · SLA.', 3)
+    ('essencial',    'Essencial',    99,   '1 número · 1 agente · catálogo até 500 SKUs · 3 usuários.', 1),
+    ('profissional', 'Profissional', 249,  'Até 3 números · multi-agente · equipe · broadcast · 8 usuários.', 2),
+    ('escala',       'Escala',       599,  'Números ilimitados · WhatsApp API oficial · ERP · SLA.', 3)
 ON CONFLICT (id) DO NOTHING;
 
 -- Histórico de alterações de preço (auditoria + mapeia price ids antigos ao plano,
@@ -650,3 +650,65 @@ CREATE TABLE IF NOT EXISTS webhook_entregas (
 );
 CREATE INDEX IF NOT EXISTS idx_webhook_entregas_hook ON webhook_entregas(webhook_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_webhook_entregas_tenant ON webhook_entregas(tenant_id, created_at DESC);
+
+-- ===========================================================================
+-- COTA DE MENSAGENS + PACOTES AVULSOS (substitui a cobrança por token).
+-- Cada plano inclui N respostas da IA por ciclo de cobrança. Passou disso, o
+-- cliente compra um pacote avulso (pagamento único, pré-pago) que vale até o
+-- fim do ciclo em que foi pago. Sem saldo, a IA para e a conversa vai para a
+-- fila humana. Tokens seguem medidos em usage_events só como custo interno.
+-- ===========================================================================
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS mensagens_incluidas INT CHECK (mensagens_incluidas >= 0);
+UPDATE plans SET mensagens_incluidas = CASE id
+        WHEN 'essencial' THEN 1000 WHEN 'profissional' THEN 3000 ELSE 10000 END
+ WHERE mensagens_incluidas IS NULL;
+
+-- Início do ciclo vigente (Stripe); junto com current_period_end define a janela da cota.
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_start TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_usage_tenant_tipo_created ON usage_events(tenant_id, tipo, created_at);
+
+-- Catálogo de pacotes (editável na central admin; o preço vai inline no checkout).
+CREATE TABLE IF NOT EXISTS message_packs (
+    id          TEXT PRIMARY KEY,
+    nome        TEXT NOT NULL,
+    mensagens   INT NOT NULL CHECK (mensagens > 0),
+    preco       NUMERIC(10,2) NOT NULL CHECK (preco > 0),
+    ativo       BOOLEAN NOT NULL DEFAULT true,
+    ordem       INT NOT NULL DEFAULT 0,
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO message_packs (id, nome, mensagens, preco, ordem) VALUES
+    ('p500',  '+500 mensagens',   500,  39, 1),
+    ('p1000', '+1.000 mensagens', 1000, 69, 2),
+    ('p3000', '+3.000 mensagens', 3000, 179, 3)
+ON CONFLICT (id) DO NOTHING;
+
+-- Compras de pacote. `valido_ate` = fim do ciclo em que o pagamento confirmou.
+CREATE TABLE IF NOT EXISTS message_pack_purchases (
+    id                 BIGSERIAL PRIMARY KEY,
+    tenant_id          BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    pack_id            TEXT NOT NULL,
+    mensagens          INT NOT NULL CHECK (mensagens > 0),
+    preco              NUMERIC(10,2) NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'pendente'
+                         CHECK (status IN ('pendente','pago','falhou','expirado')),
+    stripe_session_id  TEXT UNIQUE,
+    valido_ate         TIMESTAMPTZ,
+    comprado_por       TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    pago_em            TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_pack_purchases_tenant ON message_pack_purchases(tenant_id, status, valido_ate);
+
+-- Avisos de cota já enviados (80% e 100%): um por nível, por ciclo e por limite
+-- (comprar um pacote muda o limite, então o aviso pode voltar a disparar).
+CREATE TABLE IF NOT EXISTS message_quota_alerts (
+    tenant_id       BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    periodo_inicio  TIMESTAMPTZ NOT NULL,
+    nivel           INT NOT NULL,
+    limite          INT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, periodo_inicio, nivel, limite)
+);

@@ -52,18 +52,8 @@ def test_custo_tokens_por_fonte(monkeypatch):
     assert settings.custo_tokens("chat", 500) == 0.10
 
 
-def test_metered_enabled_flag(monkeypatch):
-    monkeypatch.setattr(settings, "stripe_secret_key", "sk_test", raising=False)
-    monkeypatch.setattr(settings, "stripe_meter_indexacao", "", raising=False)
-    monkeypatch.setattr(settings, "stripe_meter_conversa", "", raising=False)
-    assert settings.metered_enabled is False
-    monkeypatch.setattr(settings, "stripe_meter_indexacao", "m_idx", raising=False)
-    monkeypatch.setattr(settings, "stripe_meter_conversa", "m_chat", raising=False)
-    assert settings.metered_enabled is True
-
-
 def test_registrar_consumo_mede_sem_stripe(monkeypatch):
-    # metered desligado: registra o consumo mas NÃO chama o Stripe.
+    # Tokens viram só custo interno (usage_events); nada vai ao Stripe.
     monkeypatch.setattr(settings, "stripe_secret_key", "", raising=False)
     capt = {}
     monkeypatch.setattr(store, "record_usage",

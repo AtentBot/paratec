@@ -13,9 +13,9 @@ serviços → 6) remover Authentik → 7) verificação**.
 
 1. **Produtos e preços** (Dashboard → Products). Crie 3 produtos com um **preço
    recorrente mensal (BRL)** cada e copie os **Price IDs** (`price_...`):
-   - Essencial — R$ 690/mês
-   - Profissional — R$ 1.690/mês
-   - Escala — R$ 3.900/mês
+   - Essencial — R$ 99/mês
+   - Profissional — R$ 249/mês
+   - Escala — R$ 599/mês
    > NÃO configure trial no preço (o checkout é sem trial por design).
    > Esses são só os preços iniciais. Depois do go-live, **altere o preço pela
    > central admin → Planos e preços** (`/admin/planos`), nunca direto no Stripe:
@@ -31,7 +31,8 @@ serviços → 6) remover Authentik → 7) verificação**.
      `https://app.atentbot.com/agent/billing/webhook`).
    - Eventos: `checkout.session.completed`, `customer.subscription.created`,
      `customer.subscription.updated`, `customer.subscription.deleted`,
-     `invoice.paid`, `invoice.payment_failed`.
+     `invoice.paid`, `invoice.payment_failed`, `checkout.session.async_payment_succeeded`,
+     `checkout.session.async_payment_failed` (pacotes pagos por Pix).
    - Copie o **Signing secret** (`whsec_...`).
 
 Teste local do webhook (opcional): `stripe listen --forward-to
@@ -39,35 +40,26 @@ localhost:8000/billing/webhook` e `stripe trigger checkout.session.completed`.
 
 ---
 
-## 1b. Cobrança automática dos extras (Stripe Billing Meters) — opcional
+## 1b. Cota de mensagens e pacotes avulsos
 
-O consumo (indexação + conversas) é sempre **medido e mostrado** no painel. Para
-**cobrar automaticamente** na fatura, ligue os medidores do Stripe:
+Cada plano inclui N respostas da IA por ciclo (`plans.mensagens_incluidas`:
+1.000 / 3.000 / 10.000). Acima disso o cliente compra um **pacote avulso** em
+Assinatura (pagamento único, pré-pago, válido até o fim do ciclo em que foi pago).
+Sem saldo, a IA não é chamada: o cliente final recebe `COTA_ESGOTADA_MENSAGEM` e a
+conversa vai para a fila humana. O dono da conta recebe e-mail em 80% e 100%.
 
-1. **Meters** (Dashboard → Billing → Meters, ou API `billing.Meter`). Crie dois,
-   com agregação **sum** sobre o campo `value`:
-   - indexação → `event_name`: `atentbot_indexacao`
-   - conversa → `event_name`: `atentbot_conversa`
-2. **Preços metered** (um por meter, recorrente mensal, moeda BRL). O código
-   reporta `value = tokens`, então use **`unit_amount_decimal`** (centavos por
-   token) casando com as tarifas do serviço:
-   - indexação: R$ 0,02 / 1.000 tokens → `unit_amount_decimal = "0.002"`
-   - conversa: R$ 0,20 / 1.000 tokens → `unit_amount_decimal = "0.02"`
-   > Mantenha essas tarifas iguais às `USAGE_PRECO_POR_1K_TOKENS_*` (a estimativa
-   > do painel usa as do serviço; a cobrança usa as do Stripe).
-3. **Envs** (ver `.env.docker.example`): `STRIPE_METER_INDEXACAO`,
-   `STRIPE_METER_CONVERSA`, `STRIPE_PRICE_METER_INDEXACAO`,
-   `STRIPE_PRICE_METER_CONVERSA`. Preenchidos os quatro (com `STRIPE_SECRET_KEY`),
-   `metered_enabled` liga: o painel passa a marcar "Cobrado na fatura" e o
-   consumo é reportado ao Stripe em tempo real.
-4. **Checkout:** novas assinaturas já entram com os itens metered (plano base +
-   2 itens de consumo). **Assinaturas já existentes** NÃO ganham os itens
-   retroativamente — rode o utilitário (idempotente, dry-run por padrão):
-   `cd agent-service && .venv/bin/python backfill_metered.py` (depois `--apply`).
-5. Redeploy o agent-service com as envs. O reporte é best-effort: se o Stripe
-   falhar, o consumo continua medido no banco (nada trava o atendimento).
-
-Enquanto os envs ficarem vazios, o comportamento é o atual (medir e mostrar).
+- **Nada a criar no Stripe:** o preço do pacote vai inline no Checkout
+  (`price_data`), a partir da tabela `message_packs` (editável em `/admin/planos`,
+  junto com a cota de cada plano).
+- **Webhook:** além dos eventos acima, assine
+  `checkout.session.async_payment_succeeded` e
+  `checkout.session.async_payment_failed` (Pix/boleto confirmam depois).
+- **Pix:** ligue em Settings → Payment methods para aparecer no checkout do pacote.
+- **Cortesia:** assinaturas sem `stripe_subscription_id` (ex.: Paratec) não têm
+  limite. `COTA_MENSAGENS_ATIVA=false` desliga a cota para todos (emergência).
+- A antiga cobrança por token (Billing Meters) foi removida; tokens seguem medidos
+  em `usage_events` só como custo interno (`/admin/consumo`). Assinaturas antigas
+  que tenham itens metered param de receber eventos, ou seja, cobram R$ 0 neles.
 
 ## 2. Variáveis de ambiente (agent-service)
 

@@ -123,7 +123,7 @@ export default function CadastroPage() {
           <span>
             Li e aceito as{" "}
             <Link href="/cobranca" target="_blank" className="font-medium text-accent-ink hover:underline">Regras de Cobrança</Link>{" "}
-            (mensalidade + consumo) e os{" "}
+            (mensalidade com mensagens incluídas + pacotes opcionais) e os{" "}
             <Link href="/confidencialidade" target="_blank" className="font-medium text-accent-ink hover:underline">Termos de Confidencialidade</Link>.
           </span>
         </label>

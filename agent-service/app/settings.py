@@ -132,13 +132,11 @@ class Settings(BaseSettings):
     # Carência (dias) para assinatura em past_due antes de bloquear o acesso.
     past_due_grace_days: int = 3
 
-    # Consumo pay-per-use por tokens (custo do Gemini + margem), em BRL por 1.000
-    # tokens. Duas fontes: INDEXAÇÃO (embeddings, ao subir/reindexar documentos e
-    # catálogo) e CONVERSA (LLM do agente por mensagem). Ajuste às suas tabelas.
-    # Hoje o modelo é "medir e mostrar": o valor é estimado/exibido, ainda não
-    # cobrado automaticamente (gancho de Stripe metered fica para depois).
-    usage_preco_por_1k_tokens_embedding: float = 0.02
-    usage_preco_por_1k_tokens_chat: float = 0.20
+    # Custo INTERNO dos tokens (Gemini), em BRL por 1.000 tokens: só para a
+    # central admin acompanhar margem. O cliente não paga por token — paga a
+    # mensalidade (com cota de mensagens) + pacotes avulsos. Ajuste às tabelas.
+    usage_preco_por_1k_tokens_embedding: float = 0.001
+    usage_preco_por_1k_tokens_chat: float = 0.005
 
     def custo_tokens(self, tipo: str, tokens: int) -> float:
         """Custo estimado (BRL) para uma quantidade de tokens, por fonte."""
@@ -146,27 +144,23 @@ class Settings(BaseSettings):
                 else self.usage_preco_por_1k_tokens_chat)
         return round((tokens / 1000.0) * taxa, 4)
 
-    # Cobrança AUTOMÁTICA dos extras (Stripe Billing Meters). Vazio = desligado
-    # (só medir e mostrar). Ligue criando 2 meters + 2 preços metered no Stripe
-    # (ver docs/DEPLOY_SAAS.md) e preenchendo estes valores. `event_name` é o nome
-    # do meter; o preço metered entra no checkout junto do plano base.
-    stripe_meter_indexacao: str = ""            # event_name do meter de indexação
-    stripe_meter_conversa: str = ""             # event_name do meter de conversa
-    stripe_price_meter_indexacao: str = ""      # price id metered (indexação)
-    stripe_price_meter_conversa: str = ""       # price id metered (conversa)
+    # Cota de mensagens por plano (plans.mensagens_incluidas) + pacotes avulsos.
+    # Desligada = IA responde sem limite (útil em dev ou numa emergência).
+    cota_mensagens_ativa: bool = True
+    # Resposta enviada ao cliente final quando a cota e os pacotes acabaram; a
+    # conversa vai para a fila humana (a IA não é chamada).
+    cota_esgotada_mensagem: str = (
+        "Recebemos sua mensagem! Um atendente vai continuar seu atendimento por aqui "
+        "em instantes."
+    )
 
     @property
-    def metered_enabled(self) -> bool:
-        return bool(self.stripe_configured and self.stripe_meter_indexacao
-                    and self.stripe_meter_conversa)
-
-    def meter_event_name(self, tipo: str) -> str:
-        return self.stripe_meter_conversa if tipo == "chat" else self.stripe_meter_indexacao
+    def pacote_success_url(self) -> str:
+        return f"{self.panel_url.rstrip('/')}/assinatura?pacote=ok"
 
     @property
-    def metered_price_ids(self) -> list[str]:
-        return [p for p in (self.stripe_price_meter_indexacao,
-                            self.stripe_price_meter_conversa) if p]
+    def pacote_cancel_url(self) -> str:
+        return f"{self.panel_url.rstrip('/')}/assinatura?pacote=cancelado"
 
     # Diretório dos banners/imagens de promoções (servidos em /media). Vazio =
     # <agent-service>/media. Aponte para um volume Docker para persistir.

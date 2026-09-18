@@ -475,6 +475,22 @@ def responder(
             pass
         return ""
 
+    # Cota de mensagens do ciclo esgotada (plano + pacotes): a IA não é chamada.
+    # O cliente recebe um aviso curto e a conversa vai para a fila humana — as
+    # próximas mensagens caem no "IA pausada" acima, sem repetir o aviso.
+    from . import billing
+
+    if not billing.pode_responder(tenant_id):
+        resp = settings.cota_esgotada_mensagem
+        try:
+            store.add_message(tenant_id, thread_id, "agente", resp)
+            store.set_status(tenant_id, thread_id, "humano")
+            store.log_event(tenant_id, "cota_esgotada", thread_id=thread_id)
+        except Exception as e:  # pragma: no cover
+            log.warning("persistência (cota esgotada) falhou: %s", e)
+        billing.verificar_alertas_cota(tenant_id)
+        return resp
+
     cfg = _cfg_para(tenant_id, instancia)
     app = _app_do_cfg(cfg)
 
@@ -497,14 +513,12 @@ def responder(
     )
     resposta = _extrair_texto(result["messages"][-1].content)
 
-    # Consumo pay-per-use da CONVERSA (tokens do LLM). Registra + reporta ao
-    # Stripe (se metered ligado). Best-effort — nunca quebra a resposta.
+    # Cada resposta conta 1 mensagem da cota (evento 'chat'); os tokens ficam
+    # como custo interno. Best-effort — nunca quebra a resposta.
     try:
         tks = _somar_tokens(result["messages"])
-        if tks:
-            from . import billing
-
-            billing.registrar_consumo(tenant_id, "chat", tks, {"thread_id": thread_id})
+        billing.registrar_consumo(tenant_id, "chat", max(tks, 1), {"thread_id": thread_id})
+        billing.verificar_alertas_cota(tenant_id)
     except Exception as e:  # pragma: no cover
         log.warning("registro de consumo de conversa falhou: %s", e)
 

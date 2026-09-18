@@ -31,7 +31,7 @@ export default function AdminConsumo() {
     <div className="flex flex-col gap-4 animate-fade-in">
       {totais && (
         <div className="rounded-2xl border bg-surface p-5 shadow-card">
-          <p className="text-xs font-semibold uppercase tracking-wider text-faint">Consumo do mês — total{q ? " (filtrado)" : ""}</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-faint">Custo de IA do mês — total{q ? " (filtrado)" : ""}</p>
           <p className="mt-1 text-2xl font-bold text-ink">{brl(Number(totais.custo))}</p>
           <p className="text-sm text-muted">{Number(totais.tokens).toLocaleString("pt-BR")} tokens em {totais.tenants} clientes</p>
         </div>
@@ -49,7 +49,7 @@ export default function AdminConsumo() {
                 <tr className="border-b text-left text-[11px] uppercase tracking-wider text-faint">
                   <th className="px-4 py-3">Cliente</th>
                   <th className="px-4 py-3 text-right">Tokens</th>
-                  <th className="px-4 py-3 text-right">Custo estimado</th>
+                  <th className="px-4 py-3 text-right">Custo de IA (estimado)</th>
                 </tr>
               </thead>
               <tbody>

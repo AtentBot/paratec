@@ -247,26 +247,41 @@ export interface Plano {
   nome: string;
   preco: number;
   descricao: string;
+  mensagens_incluidas: number;
   disponivel: boolean;
 }
 
-// --- Consumo pay-per-use (medição de tokens) ---
-export interface UsoTipo {
-  tipo: string;
-  label: string;
-  tokens: number;
-  custo: number;
-  eventos: number;
+// --- Cota de mensagens + pacotes avulsos ---
+export interface PacoteMensagens {
+  id: string;
+  nome: string;
+  mensagens: number;
+  preco: number;
+}
+
+export interface PacoteAtivo {
+  id: number;
+  pack_id: string;
+  mensagens: number;
+  preco: number;
+  pago_em: string;
+  valido_ate: string;
 }
 
 export interface Uso {
-  mes: string;
-  tokens: number;
-  custo: number;
-  eventos: number;
-  por_tipo: UsoTipo[];
-  cobranca_automatica: boolean;
-  precos: { embedding_por_1k: number; chat_por_1k: number };
+  ilimitado: boolean;
+  plano: string | null;
+  periodo_inicio: string;
+  periodo_fim: string;
+  incluidas: number;
+  pacotes: number;
+  limite: number;
+  usadas: number;
+  restantes: number;
+  percentual: number;
+  esgotada: boolean;
+  pacotes_ativos: PacoteAtivo[];
+  pacotes_disponiveis: PacoteMensagens[];
 }
 
 // --- Suporte / Chamados ---
@@ -326,6 +341,7 @@ export interface AdminPlano {
   descricao: string;
   stripe_price_id: string | null;
   assinantes: number;
+  mensagens_incluidas: number;
   updated_by: string | null;
   updated_at: string | null;
 }
@@ -342,9 +358,16 @@ export interface AdminPlanoHistorico {
   created_at: string;
 }
 
+export interface AdminPacote extends PacoteMensagens {
+  ativo: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
 export interface AdminPlanos {
   items: AdminPlano[];
   historico: AdminPlanoHistorico[];
+  pacotes: AdminPacote[];
   stripe_configurado: boolean;
   resultado?: {
     plano: string;

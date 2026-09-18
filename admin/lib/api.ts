@@ -173,6 +173,8 @@ export const api = {
   uso: () => get<Uso>("/billing/usage"),
   checkout: (plano: string) =>
     send<{ url: string }>("POST", "/billing/checkout", { plano }),
+  comprarPacote: (pacote: string) =>
+    send<{ url: string }>("POST", "/billing/pacotes/checkout", { pacote }),
   cancelarAssinatura: (pesquisa?: { respostas?: Record<string, string>; comentario?: string }) =>
     send<AssinaturaStatus>("POST", "/billing/cancel", pesquisa ?? {}),
   reativarAssinatura: () => send<AssinaturaStatus>("POST", "/billing/reactivate"),
@@ -212,6 +214,10 @@ export const api = {
   adminPlanos: () => get<AdminPlanos>("/admin/planos"),
   adminAlterarPreco: (plano: string, body: { preco: number; aplicar_existentes: boolean }) =>
     send<AdminPlanos>("PATCH", `/admin/planos/${plano}`, body),
+  adminAlterarCota: (plano: string, mensagens_incluidas: number) =>
+    send<AdminPlanos>("PATCH", `/admin/planos/${plano}/cota`, { mensagens_incluidas }),
+  adminAlterarPacote: (pacote: string, body: { mensagens?: number; preco?: number; ativo?: boolean }) =>
+    send<AdminPlanos>("PATCH", `/admin/pacotes/${pacote}`, body),
   adminConsumo: (p: { q?: string; limit?: number; offset?: number } = {}) =>
     get<{ items: AdminConsumoTenant[]; totais: { tenants: number; tokens: number; custo: number } }>(
       `/admin/consumo?${_qs(p)}`,

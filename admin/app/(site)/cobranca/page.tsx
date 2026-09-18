@@ -19,50 +19,66 @@ export default function CobrancaPage() {
       </div>
 
       <div className="mt-2 text-sm leading-relaxed text-ink [&_p]:mt-3 [&_p]:text-muted [&_li]:mt-1.5 [&_ul]:mt-2 [&_ul]:list-disc [&_ul]:pl-5 [&_li]:text-muted">
-        <H>1. Modelo de preço: mensalidade + consumo</H>
+        <H>1. Modelo de preço: mensalidade com mensagens incluídas</H>
         <p>
-          A cobrança do AtentBot tem <strong>duas partes</strong>:
+          A cobrança do AtentBot tem <strong>duas partes</strong>, e só a primeira é obrigatória:
         </p>
         <ul>
           <li>
-            <strong>Mensalidade base (plano):</strong> valor fixo do plano
-            contratado (Essencial, Profissional ou Escala), cobrado por período
-            mensal. Define os limites do plano (números de WhatsApp, agentes,
-            usuários, etc.).
+            <strong>Mensalidade (plano):</strong> valor fixo do plano contratado
+            (Essencial, Profissional ou Escala), cobrado por período mensal. Define
+            os limites do plano (números de WhatsApp, agentes, usuários) e a
+            <strong> quantidade de mensagens da IA incluídas</strong> por ciclo.
           </li>
           <li>
-            <strong>Extras por consumo (pay-per-use):</strong> valor variável
-            conforme o uso que gera custo de IA, medido em tokens:
-            <ul>
-              <li><strong>Indexação</strong> — ao enviar/atualizar documentos e reindexar o catálogo (geração de embeddings);</li>
-              <li><strong>Conversas</strong> — processamento das mensagens pelo agente de IA.</li>
-            </ul>
-            Quanto mais documentos e mensagens, maior o consumo. As tarifas
-            vigentes por 1.000 tokens ficam visíveis no painel, em Assinatura.
+            <strong>Pacotes extras (opcionais):</strong> se as mensagens do ciclo
+            acabarem, o responsável da conta pode comprar um pacote no painel, em
+            Assinatura, com pagamento único e antecipado. Nada é cobrado sem que
+            você compre.
           </li>
         </ul>
+        <p>
+          <strong>O que conta como mensagem:</strong> cada resposta enviada pelo
+          agente de IA a um cliente. Ler documentos, importar e reindexar o
+          catálogo e as mensagens enviadas pela sua equipe não contam.
+        </p>
 
         <H>2. Ciclo, forma de pagamento e início</H>
         <p>
           A mensalidade é cobrada de forma recorrente (mensal) via cartão de
-          crédito, processada pela Stripe. <strong>Não há período de teste
+          crédito, processada pela Stripe. Os pacotes extras são pagos na compra,
+          pelos meios disponíveis no checkout. <strong>Não há período de teste
           gratuito</strong>: a primeira cobrança ocorre na contratação e o acesso
           é liberado em seguida.
         </p>
 
-        <H>3. Como os extras são cobrados</H>
-        <p>
-          O consumo é medido continuamente e exibido no painel. Enquanto a
-          cobrança automática de extras não estiver ativada na sua conta, os
-          valores aparecem como <strong>estimativa</strong> (informativos). Quando
-          ativada, o consumo do período é somado à fatura da assinatura. O painel
-          sempre mostra o consumo acumulado do mês antes do fechamento.
-        </p>
+        <H>3. Cota do ciclo e pacotes extras</H>
+        <ul>
+          <li>
+            As mensagens incluídas renovam a cada ciclo de cobrança. O que não for
+            usado <strong>não acumula</strong> para o ciclo seguinte.
+          </li>
+          <li>
+            O pacote extra entra no saldo quando o pagamento é confirmado e vale
+            <strong> até o fim do ciclo em que foi pago</strong>. Mensagens de pacote
+            não usadas expiram na renovação e não são reembolsadas.
+          </li>
+          <li>
+            Avisamos o responsável da conta por e-mail ao atingir 80% e 100% das
+            mensagens do ciclo. O saldo fica sempre visível no painel.
+          </li>
+          <li>
+            Se as mensagens acabarem e nenhum pacote for comprado, a IA para de
+            responder até a renovação. Cada cliente que escrever recebe um aviso de
+            que um atendente vai continuar, e a conversa vai para a fila humana do
+            painel. Nenhum valor adicional é cobrado.
+          </li>
+        </ul>
 
         <H>4. Impostos e reajustes</H>
         <p>
-          Os valores podem estar sujeitos a tributos aplicáveis. Preços de plano e
-          tarifas de consumo podem ser reajustados mediante aviso prévio razoável
+          Os valores podem estar sujeitos a tributos aplicáveis. Preços de plano,
+          quantidade de mensagens incluídas e preços de pacote podem ser reajustados mediante aviso prévio razoável
           (ex.: 30 dias), passando a valer no ciclo seguinte.
         </p>
 
@@ -78,8 +94,8 @@ export default function CobrancaPage() {
           O cancelamento pode ser solicitado a qualquer momento pelo painel, em
           Assinatura. O cancelamento é <strong>agendado para o fim do período já
           pago</strong>: você mantém o acesso até lá e não é cobrada nova
-          mensalidade. Não há reembolso proporcional do período em curso. Extras
-          de consumo já incorridos até a data são devidos. O cancelamento pode ser
+          mensalidade. Não há reembolso proporcional do período em curso nem dos
+          pacotes extras já comprados. O cancelamento pode ser
           revertido (reativado) enquanto o período não terminar.
         </p>
 

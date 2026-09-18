@@ -55,8 +55,8 @@ def _estimar_tokens(textos: list[str]) -> int:
 
 
 def _registrar_consumo(tenant_id: int, tipo: str, textos: list[str], meta: dict) -> dict:
-    """Mede os tokens de embedding, registra o consumo e reporta ao Stripe se a
-    cobrança metered estiver ligada (via billing.registrar_consumo). Best-effort."""
+    """Mede os tokens de embedding e registra o consumo (custo interno; a
+    indexação não é cobrada do cliente). Best-effort."""
     tokens = _estimar_tokens(textos)
     try:
         from . import billing

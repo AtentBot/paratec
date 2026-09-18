@@ -3,7 +3,7 @@
 import { api } from "@/lib/api";
 import { precoPlano } from "@/lib/format";
 import type { Plano } from "@/lib/types";
-import { Check, Plus } from "lucide-react";
+import { Check, MessageSquare } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -85,8 +85,9 @@ export function PlanosCards() {
               </span>
               <span className={"text-sm " + (d ? "text-stage-muted" : "text-muted")}>por mês</span>
             </p>
-            <p className={"mt-1 flex items-center gap-1 text-xs " + (d ? "text-stage-muted" : "text-faint")}>
-              <Plus size={12} aria-hidden /> consumo da IA
+            <p className={"mt-2 flex items-center gap-1.5 text-sm font-medium " + (d ? "text-stage-fg" : "text-ink")}>
+              <MessageSquare size={15} className={d ? "text-accent" : "text-tick"} aria-hidden />
+              {p?.mensagens_incluidas ? `${p.mensagens_incluidas.toLocaleString("pt-BR")} mensagens da IA por mês` : "\u00a0"}
             </p>
 
             <ul className={"mt-7 flex flex-1 flex-col gap-3 border-t pt-6 " + (d ? "border-stage-line" : "")}>

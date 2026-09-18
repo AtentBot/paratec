@@ -69,8 +69,8 @@ const PERGUNTAS = [
     a: "Ele responde apenas com base no seu catálogo e nos documentos que você enviou. Fora disso, avisa o cliente e coloca a conversa na fila humana para a sua equipe.",
   },
   {
-    q: "Como funciona a cobrança do consumo?",
-    a: "Além da mensalidade, você paga pelo que a IA usa: as conversas com seus clientes e os documentos que ela lê para aprender sobre o seu negócio. As tarifas e o valor acumulado do mês ficam visíveis no painel, em Assinatura.",
+    q: "E se acabarem as mensagens do plano?",
+    a: "Cada plano inclui uma quantidade de respostas da IA por mês. Se acabar antes da renovação, você compra um pacote extra no painel, com pagamento único, sem mudar de plano. Se preferir não comprar, as novas conversas vão para a fila humana até o mês virar. Não existe cobrança surpresa na fatura.",
   },
   {
     q: "Tem fidelidade ou multa?",
@@ -189,7 +189,7 @@ export default function Landing() {
                 Tudo o que o agente faz, você acompanha
               </h2>
               <p className="text-lg leading-relaxed text-stage-muted">
-                Conversas, fila humana, orçamentos, catálogo e o consumo do mês em um painel só.
+                Conversas, fila humana, orçamentos, catálogo e as mensagens do mês em um painel só.
                 Dá para entrar em qualquer conversa e assumir o atendimento na hora.
               </p>
             </div>
@@ -231,14 +231,14 @@ export default function Landing() {
           <div className="max-w-2xl">
             <h2 className="site-display site-h2 text-ink">Planos</h2>
             <p className="mt-3 text-lg text-muted">
-              Escolha pelo tamanho da sua operação. Você paga a mensalidade do plano mais o
-              consumo da IA, e muda de plano quando precisar.
+              Escolha pelo tamanho da sua operação. A mensalidade já inclui as mensagens da IA
+              do mês, e você muda de plano quando precisar.
             </p>
           </div>
 
           <PlanosCards />
 
-          {/* Como o consumo é cobrado — transparência que costuma decidir a compra */}
+          {/* Como funcionam as mensagens — transparência que costuma decidir a compra */}
           <div className="mt-12 grid gap-6 rounded-3xl border bg-surface p-7 md:grid-cols-[minmax(0,4fr)_minmax(0,5fr)] md:gap-10">
             <div>
               <h3 className="text-lg font-semibold text-ink">Todos os planos incluem</h3>
@@ -248,11 +248,11 @@ export default function Landing() {
               </p>
             </div>
             <div className="md:border-l md:pl-10">
-              <h3 className="text-lg font-semibold text-ink">Como o consumo é cobrado</h3>
+              <h3 className="text-lg font-semibold text-ink">Preço fechado, sem surpresa</h3>
               <p className="mt-2 leading-relaxed text-muted">
-                Você paga pelo que a IA usa de fato: as conversas com seus clientes e os documentos
-                que ela lê para aprender sobre o seu negócio. O
-                valor acumulado aparece no painel ao longo do mês.
+                Cada resposta da IA conta uma mensagem; ler seus documentos e o catálogo não conta.
+                Se o mês apertar, compre um pacote extra no painel (pagamento único, vale até a
+                renovação). Avisamos por e-mail quando você chegar a 80% e a 100%.
               </p>
               <p className="mt-3 text-sm text-faint">
                 Detalhes nas{" "}
