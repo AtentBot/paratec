@@ -1,9 +1,13 @@
+"use client";
+
 import { Card, CardHeader, Badge } from "@/components/ui";
 import { StatCard } from "@/components/stat-card";
 import { OfflineNotice } from "@/components/offline-notice";
 import { WeeklyBars, SpecialistBars, ResolutionRing } from "@/components/charts";
 import { api, tryApi } from "@/lib/api";
 import { diaSemana, especialistaLabel, iniciais, relativo } from "@/lib/format";
+import { useEffect, useState } from "react";
+import type { CatalogStats, ConversaResumo, Metrics } from "@/lib/types";
 import {
   MessagesSquare,
   Headset,
@@ -38,14 +42,26 @@ function Mini({ icon, label, value }: {
 
 const CORES = ["var(--accent)", "var(--info)", "var(--success)", "var(--warning)"];
 
-export default async function DashboardPage() {
-  const [metrics, stats, conversas] = await Promise.all([
-    tryApi(api.metrics),
-    tryApi(api.stats),
-    tryApi(() => api.conversas()),
-  ]);
+export default function DashboardPage() {
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [stats, setStats] = useState<CatalogStats | null>(null);
+  const [conversas, setConversas] = useState<ConversaResumo[] | null>(null);
+  const [carregado, setCarregado] = useState(false);
 
-  const offline = metrics === null && stats === null;
+  useEffect(() => {
+    Promise.all([
+      tryApi(api.metrics),
+      tryApi(api.stats),
+      tryApi(() => api.conversas()),
+    ]).then(([m, s, c]) => {
+      setMetrics(m);
+      setStats(s);
+      setConversas(c);
+      setCarregado(true);
+    });
+  }, []);
+
+  const offline = carregado && metrics === null && stats === null;
 
   const totais = metrics?.totais ?? {
     conversas: 0,

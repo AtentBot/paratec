@@ -6,21 +6,29 @@ import { BackendStatus } from "./backend-status";
 import { ThemeToggle } from "./theme-toggle";
 
 const TITLES: Record<string, { title: string; sub: string }> = {
-  "/": { title: "Dashboard", sub: "Visão geral do atendimento" },
+  "/painel": { title: "Dashboard", sub: "Visão geral do atendimento" },
   "/conversas": { title: "Atendimento", sub: "Conversas no WhatsApp — aberto e resolvido" },
   "/clientes": { title: "Clientes", sub: "Cadastros via WhatsApp" },
+  "/equipe": { title: "Equipe de vendas", sub: "Vendedores que recebem os orçamentos" },
   "/orcamentos": { title: "Orçamentos", sub: "Pedidos de orçamento para o comercial" },
   "/promocoes": { title: "Promoções", sub: "Envio de mensagens em massa" },
   "/relatorios": { title: "Relatórios", sub: "Indicadores por período e exportação" },
   "/conhecimento": { title: "Base de conhecimento", sub: "Documentos que o agente consulta (RAG)" },
   "/catalogo": { title: "Catálogo", sub: "Produtos, variantes e categorias" },
   "/fila": { title: "Fila humana", sub: "Pedidos, entregas e boletos" },
+  "/agentes": { title: "Agentes", sub: "Multi-agente por número de WhatsApp" },
+  "/configuracoes": { title: "Configurações", sub: "Conexões de WhatsApp" },
+  "/integracoes": { title: "Integrações", sub: "API REST para conectar seus sistemas" },
+  "/assinatura": { title: "Assinatura", sub: "Seu plano e cobrança" },
+  "/suporte": { title: "Suporte", sub: "Chamados e contato" },
+  "/conta": { title: "Minha conta", sub: "Perfil e senha" },
+  "/admin": { title: "Administração", sub: "Central da equipe (todos os clientes)" },
 };
 
 export function Topbar() {
   const path = usePathname();
-  const key = path === "/" ? "/" : "/" + path.split("/")[1];
-  const meta = TITLES[key] ?? { title: "Paratec", sub: "" };
+  const key = "/" + path.split("/")[1];
+  const meta = TITLES[key] ?? { title: "AtentBot", sub: "" };
 
   return (
     <header className="sticky top-0 z-20 flex items-center gap-4 border-b bg-bg/80 px-6 py-3.5 backdrop-blur-md">

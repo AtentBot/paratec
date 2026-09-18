@@ -62,6 +62,52 @@ export interface Vendedor {
   updated_at: string;
 }
 
+// --- WhatsApp (conexões / Configurações) ----------------------------------
+
+export type WhatsappEstado = "conectado" | "conectando" | "desconectado";
+
+export interface WhatsappInstancia {
+  nome: string;
+  estado: WhatsappEstado;
+  numero: string | null;
+  perfil: string | null;
+}
+
+export interface WhatsappQrCode {
+  base64: string | null; // data:image/png;base64,... (pronto para <img src>)
+  code: string | null;
+  pairing_code: string | null;
+}
+
+export interface WhatsappConfig {
+  configurado: boolean;
+  webhook_automatico: boolean;
+  instancia_padrao: string;
+}
+
+// --- Agentes (multi-agente por número) ------------------------------------
+
+export type Capacidade = "catalogo" | "pedidos" | "entrega" | "boletos" | "conhecimento";
+
+export interface CapacidadeInfo {
+  chave: Capacidade;
+  label: string;
+}
+
+export interface Agente {
+  id: number;
+  nome: string;
+  descricao: string | null;
+  instancia: string | null; // conexão de WhatsApp (número) amarrada
+  persona: string | null;
+  capacidades: Capacidade[];
+  ativo: boolean;
+  is_default: boolean; // agente catch-all (atende números sem agente próprio)
+  hiperpersonalizacao: boolean; // usa histórico do cliente como contexto
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RagStatus {
   enabled: boolean;
   chunks?: number;
@@ -171,4 +217,307 @@ export interface Metrics {
     orcamentos_abertos: number;
     campanhas: number;
   };
+}
+
+// --- Autenticação & assinatura (SaaS multi-tenant) ---
+export interface AssinaturaStatus {
+  tem_assinatura: boolean;
+  ativa: boolean;
+  status: string;
+  plan: string | null;
+  cancel_at_period_end: boolean;
+  current_period_end: string | null;
+}
+
+export interface Me {
+  email: string;
+  nome: string | null;
+  name: string | null;
+  username: string | null;
+  role: string;
+  is_staff: boolean;
+  whatsapp: string | null;
+  verificacoes: { email: boolean; whatsapp: boolean };
+  tenant: { id: number; nome: string | null; slug: string | null };
+  assinatura: AssinaturaStatus;
+}
+
+export interface Plano {
+  id: string;
+  nome: string;
+  preco: number;
+  descricao: string;
+  mensagens_incluidas: number;
+  disponivel: boolean;
+}
+
+// --- Cota de mensagens + pacotes avulsos ---
+export interface PacoteMensagens {
+  id: string;
+  nome: string;
+  mensagens: number;
+  preco: number;
+}
+
+export interface PacoteAtivo {
+  id: number;
+  pack_id: string;
+  mensagens: number;
+  preco: number;
+  pago_em: string;
+  valido_ate: string;
+}
+
+export interface Uso {
+  ilimitado: boolean;
+  plano: string | null;
+  periodo_inicio: string;
+  periodo_fim: string;
+  incluidas: number;
+  pacotes: number;
+  limite: number;
+  usadas: number;
+  restantes: number;
+  percentual: number;
+  esgotada: boolean;
+  pacotes_ativos: PacoteAtivo[];
+  pacotes_disponiveis: PacoteMensagens[];
+}
+
+// --- Suporte / Chamados ---
+export interface TicketMsg {
+  autor: "cliente" | "suporte";
+  corpo: string;
+  created_at: string;
+}
+
+export interface TicketResumo {
+  id: number;
+  assunto: string;
+  categoria: string;
+  prioridade: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  mensagens: number;
+}
+
+export interface TicketDetalhe {
+  id: number;
+  assunto: string;
+  categoria: string;
+  prioridade: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  mensagens: TicketMsg[];
+}
+
+// --- Central admin (staff/Dew) — cross-tenant ---
+export interface AdminOverview {
+  tenants: number;
+  ativos: number;
+  chamados_abertos: number;
+  consumo_mes: number;
+}
+
+export interface AdminTenant {
+  id: number;
+  nome: string;
+  slug: string;
+  tenant_status: string;
+  created_at: string;
+  plan: string | null;
+  sub_status: string | null;
+  cancel_at_period_end: boolean | null;
+  current_period_end: string | null;
+  usuarios: number;
+}
+
+export interface AdminPlano {
+  id: string;
+  nome: string;
+  preco: number;
+  descricao: string;
+  stripe_price_id: string | null;
+  assinantes: number;
+  mensagens_incluidas: number;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface AdminPlanoHistorico {
+  id: number;
+  plan_id: string;
+  preco_anterior: number | null;
+  preco_novo: number;
+  stripe_price_id_novo: string | null;
+  assinaturas_migradas: number;
+  assinaturas_falhas: number;
+  alterado_por: string | null;
+  created_at: string;
+}
+
+export interface AdminPacote extends PacoteMensagens {
+  ativo: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface AdminPlanos {
+  items: AdminPlano[];
+  historico: AdminPlanoHistorico[];
+  pacotes: AdminPacote[];
+  stripe_configurado: boolean;
+  resultado?: {
+    plano: string;
+    preco: number;
+    stripe_price_id: string | null;
+    assinaturas_migradas: number;
+    assinaturas_falhas: number;
+  };
+}
+
+export interface AdminTicketResumo {
+  id: number;
+  assunto: string;
+  categoria: string;
+  prioridade: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  tenant_id: number;
+  tenant_nome: string;
+  mensagens: number;
+}
+
+export interface AdminTicketDetalhe {
+  id: number;
+  tenant_id: number;
+  assunto: string;
+  categoria: string;
+  prioridade: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  tenant_nome: string;
+  cliente_email: string | null;
+  mensagens: TicketMsg[];
+}
+
+export interface AdminConsumoTenant {
+  id: number;
+  nome: string;
+  tokens: number;
+  custo: number;
+}
+
+// --- Integrações (API pública) ---
+export interface ApiEscopo {
+  id: string;
+  grupo: string;
+  label: string;
+  descricao: string;
+  escrita: boolean;
+}
+
+export interface ApiChave {
+  id: number;
+  tenant_id: number;
+  nome: string;
+  prefixo: string;
+  escopos: string[];
+  ips_permitidos: string[];
+  rate_limit_min: number;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  last_used_ip: string | null;
+  created_at: string;
+  chamadas_24h?: number;
+}
+
+/** Retorno da criação/rotação: o texto puro da chave só vem aqui. */
+export interface ApiChaveCriada extends ApiChave {
+  chave: string;
+}
+
+export interface ApiLog {
+  id: number;
+  api_key_id: number | null;
+  chave: string | null;
+  prefixo: string | null;
+  metodo: string;
+  rota: string;
+  status: number;
+  duracao_ms: number;
+  ip: string | null;
+  created_at: string;
+}
+
+export interface ApiResumo {
+  chamadas_24h: number;
+  erros_24h: number;
+  chaves_ativas: number;
+}
+
+export interface AdminApiChave extends ApiChave {
+  tenant_nome: string;
+}
+
+// --- Webhooks de saída ---
+export interface WebhookEvento {
+  id: string;
+  grupo: string;
+  label: string;
+  descricao: string;
+  exemplo: Record<string, unknown>;
+}
+
+export interface Webhook {
+  id: number;
+  url: string;
+  descricao: string | null;
+  eventos: string[];
+  ativo: boolean;
+  desativado_motivo: string | null;
+  falhas_consecutivas: number;
+  ultimo_status: number | null;
+  ultimo_envio_at: string | null;
+  created_at: string;
+  entregas_24h?: number;
+  falhas_24h?: number;
+}
+
+export interface WebhookEntrega {
+  id: number;
+  webhook_id: number;
+  evento_id: string;
+  evento: string;
+  payload: Record<string, unknown>;
+  sucesso: boolean;
+  status_code: number | null;
+  tentativas: number;
+  erro: string | null;
+  duracao_ms: number;
+  created_at: string;
+}
+
+export interface WebhookResultado {
+  sucesso: boolean;
+  status_code: number | null;
+  erro: string | null;
+  tentativas: number;
+  duracao_ms: number;
+}
+
+// --- Central admin: WhatsApp da plataforma (códigos de verificação) ---
+export interface AdminWhatsappVerificacao {
+  evolution_configurada: boolean;
+  instancia: string | null;
+  origem: "painel" | "ambiente" | null;
+  estado: WhatsappEstado | null;
+  numero: string | null;
+  perfil: string | null;
+  erro: string | null;
 }

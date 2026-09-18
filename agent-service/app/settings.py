@@ -27,15 +27,140 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     # Evolution API (envio de WhatsApp de saída pelo painel). Vazio = desabilitado.
+    # A `evolution_api_key` é a chave GLOBAL da Evolution (AUTHENTICATION_API_KEY);
+    # o agent-service a usa como proxy para o painel gerenciar instâncias, de modo
+    # que o admin da Paratec NUNCA precise acessar a Evolution diretamente.
     evolution_api_url: str = ""       # ex: http://evolution-api:8080
     evolution_api_key: str = ""
     evolution_instance: str = "paratec"
+
+    # Webhook para onde a Evolution deve entregar as mensagens das instâncias
+    # criadas pelo painel (normalmente o webhook do N8N que chama o agente).
+    # Vazio = ao conectar um número novo, NÃO configura o webhook automaticamente
+    # (o admin conecta o número, mas o roteamento ao agente é feito à parte).
+    evolution_webhook_url: str = ""
 
     # Intervalo entre envios no broadcast (anti-bloqueio do WhatsApp).
     broadcast_throttle_seconds: float = 4.0
 
     # URL pública do painel adm (usada no link dos alertas aos vendedores).
-    panel_url: str = "https://paratec.atentbot.com"
+    panel_url: str = "https://app.atentbot.com"
+
+    # E-mail de suporte/contato exibido ao cliente (páginas legais, tela de suporte).
+    support_email: str = "contato@dewconsultoria.com.br"
+
+    # API pública (integrações REST por tenant). Limite de chaves ativas por
+    # tenant e retenção (dias) do log de auditoria das chamadas.
+    api_max_chaves_por_tenant: int = 20
+    api_log_retencao_dias: int = 90
+    # Webhooks de saída. rede_privada=True só p/ desenvolvimento (desliga o
+    # bloqueio anti-SSRF de destinos internos). max_falhas seguidas → desativa.
+    webhook_max_por_tenant: int = 10
+    webhook_max_falhas: int = 15
+    webhook_retencao_dias: int = 30
+    webhook_permitir_rede_privada: bool = False
+
+    # SMTP p/ notificações por e-mail (abertura/atualização de chamados). Vazio =
+    # desabilitado (chamados ficam só no painel). NÃO commitar SMTP_PASS — use
+    # .env.docker (gitignored). smtp_ssl=true usa STARTTLS na 587 / SSL na 465.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    smtp_ssl: bool = True
+    smtp_from_name: str = "AtentBot"
+    smtp_from_email: str = ""
+    smtp_reply_to: str = ""   # vazio = usa support_email
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from_email)
+
+    @property
+    def reply_to(self) -> str:
+        return self.smtp_reply_to or self.support_email
+
+    # -----------------------------------------------------------------------
+    # Multi-tenant / autenticação de aplicação
+    # -----------------------------------------------------------------------
+    # Tenant de fallback para tráfego legado (instâncias ainda não mapeadas em
+    # `instances`). É o slug do tenant semeado com os dados de produção atuais.
+    default_tenant_slug: str = "paratec"
+    # Cookie de sessão do painel.
+    session_cookie_name: str = "atentbot_session"
+    session_ttl_days: int = 30
+    # Verificação de e-mail no cadastro: validade do link e limite de reenvios.
+    email_verification_ttl_hours: int = 48
+    email_verification_max_por_hora: int = 5
+    # Verificação de WhatsApp no cadastro: código de 6 dígitos enviado por uma
+    # instância Evolution DA PLATAFORMA (número do AtentBot, nunca o de um cliente).
+    # Vazio com a Evolution configurada = envio indisponível (503).
+    whatsapp_verificacao_instancia: str = ""
+    whatsapp_codigo_ttl_min: int = 10
+    whatsapp_codigo_max_tentativas: int = 5
+    whatsapp_codigo_intervalo_seg: int = 60
+    whatsapp_codigo_max_por_hora: int = 5
+    # Secure=false facilita o dev local em http; em produção deixe true.
+    session_cookie_secure: bool = True
+    # Anti-brute-force do login: tentativas por janela antes do lockout, tamanho
+    # da janela e duração do bloqueio (respondido com 423 Locked). Chave = e-mail
+    # + IP de origem. Em memória (1 réplica); com várias, mover p/ Redis.
+    login_max_tentativas: int = 8
+    login_janela_seg: int = 300
+    login_lockout_seg: int = 900
+
+    # Limites de upload (proteção de disponibilidade: evita OOM/enchimento de
+    # disco na réplica única). Documentos do RAG e CSVs de catálogo.
+    upload_max_mb_documento: int = 25
+    upload_max_mb_csv: int = 10
+    # Máximo de conexões SSE (tempo real) simultâneas por tenant.
+    sse_max_conexoes_por_tenant: int = 20
+
+    # -----------------------------------------------------------------------
+    # Stripe (assinatura SaaS). Vazio = billing desabilitado.
+    # -----------------------------------------------------------------------
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+    # Price IDs (recorrentes) de cada plano, criados no dashboard do Stripe.
+    stripe_price_essencial: str = ""
+    stripe_price_profissional: str = ""
+    stripe_price_escala: str = ""
+    # URLs de retorno do Checkout (no painel/site).
+    billing_success_url: str = "https://app.atentbot.com/checkout/sucesso"
+    billing_cancel_url: str = "https://app.atentbot.com/checkout/cancelado"
+    # Carência (dias) para assinatura em past_due antes de bloquear o acesso.
+    past_due_grace_days: int = 3
+
+    # Custo INTERNO dos tokens (Gemini), em BRL por 1.000 tokens: só para a
+    # central admin acompanhar margem. O cliente não paga por token — paga a
+    # mensalidade (com cota de mensagens) + pacotes avulsos. Ajuste às tabelas.
+    usage_preco_por_1k_tokens_embedding: float = 0.001
+    usage_preco_por_1k_tokens_chat: float = 0.005
+
+    def custo_tokens(self, tipo: str, tokens: int) -> float:
+        """Custo estimado (BRL) para uma quantidade de tokens, por fonte."""
+        taxa = (self.usage_preco_por_1k_tokens_embedding if tipo.startswith("rag")
+                else self.usage_preco_por_1k_tokens_chat)
+        return round((tokens / 1000.0) * taxa, 4)
+
+    # Cota de mensagens por plano (plans.mensagens_incluidas) + pacotes avulsos.
+    # Desligada = IA responde sem limite (útil em dev ou numa emergência).
+    cota_mensagens_ativa: bool = True
+    # Resposta enviada ao cliente final quando a cota e os pacotes acabaram; a
+    # conversa vai para a fila humana (a IA não é chamada).
+    cota_esgotada_mensagem: str = (
+        "Recebemos sua mensagem! Um atendente vai continuar seu atendimento por aqui "
+        "em instantes."
+    )
+
+    @property
+    def pacote_success_url(self) -> str:
+        return f"{self.panel_url.rstrip('/')}/assinatura?pacote=ok"
+
+    @property
+    def pacote_cancel_url(self) -> str:
+        return f"{self.panel_url.rstrip('/')}/assinatura?pacote=cancelado"
 
     # Diretório dos banners/imagens de promoções (servidos em /media). Vazio =
     # <agent-service>/media. Aponte para um volume Docker para persistir.
@@ -64,6 +189,28 @@ class Settings(BaseSettings):
     @property
     def evolution_configured(self) -> bool:
         return bool(self.evolution_api_url and self.evolution_api_key)
+
+    @property
+    def stripe_configured(self) -> bool:
+        return bool(self.stripe_secret_key)
+
+    @property
+    def plan_prices(self) -> dict[str, str]:
+        """plano -> price id (só os planos configurados)."""
+        return {
+            k: v
+            for k, v in {
+                "essencial": self.stripe_price_essencial,
+                "profissional": self.stripe_price_profissional,
+                "escala": self.stripe_price_escala,
+            }.items()
+            if v
+        }
+
+    @property
+    def price_to_plan(self) -> dict[str, str]:
+        """price id -> plano (inverso de plan_prices)."""
+        return {v: k for k, v in self.plan_prices.items()}
 
     @property
     def cors_origins_list(self) -> list[str]:

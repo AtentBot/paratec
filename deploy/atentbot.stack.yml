@@ -1,0 +1,141 @@
+# =============================================================================
+# AtentBot — stack de produção (Docker SWARM) para GIT-STACK no Portainer.
+#
+# Modelo: ${VAR} + variáveis de ambiente definidas NO PORTAINER (não env_file,
+# que é gitignored e não funciona em git-stack — o Portainer clona o repo).
+# Deploy: Portainer -> Stacks -> Add stack -> Repository
+#   Repository URL : https://github.com/AtentBot/paratec  (privado: usar PAT)
+#   Reference       : refs/heads/feat/atentbot-saas-multitenant
+#   Compose path    : deploy/atentbot.stack.yml
+#   Environment variables: preencher TODAS as ${VAR} abaixo (valores atuais são
+#   extraídos do serviço em execução — ver /opt/paratec/deploy/*.env no servidor
+#   ou `docker service inspect atentbot_agent-service`).
+#
+# Infra real (Hetzner, Swarm, node Athena-Evento):
+#   rede pública Traefik: traefik_public | interna admin<->agent+n8n: app_network
+#   entrypoint: websecure | certresolver: le | volume mídia: paratec_agent_media
+# O agente é PRIVADO; o n8n e o admin o alcançam pelo alias `paratec-agent`.
+# Imagens são buildadas no nó e tagueadas por commit (sem registry); trocar via
+# ${ADMIN_IMAGE}/${AGENT_IMAGE} (a landing nova mudará a tag do admin).
+# =============================================================================
+
+version: "3.8"
+
+networks:
+  app_network:
+    external: true
+  traefik_public:
+    external: true
+
+volumes:
+  paratec_agent_media:
+    external: true
+
+services:
+  # Cérebro dos agentes (FastAPI + LangGraph). PRIVADO (sem Traefik).
+  agent-service:
+    image: ${AGENT_IMAGE:-paratec/agent-service:0fe3557}
+    environment:
+      # Postgres operacional
+      PGHOST: ${PGHOST}
+      PGPORT: ${PGPORT}
+      PGDATABASE: ${PGDATABASE}
+      PGUSER: ${PGUSER}
+      PGPASSWORD: ${PGPASSWORD}
+      # RAG / pgvector (serviço paratec-vector)
+      VECTOR_HOST: ${VECTOR_HOST}
+      VECTOR_DB: ${VECTOR_DB}
+      VECTOR_USER: ${VECTOR_USER}
+      VECTOR_PASSWORD: ${VECTOR_PASSWORD}
+      # LLM
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      # WhatsApp (Evolution)
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
+      # Instância (número do AtentBot) que envia o código de verificação do cadastro.
+      WHATSAPP_VERIFICACAO_INSTANCIA: ${WHATSAPP_VERIFICACAO_INSTANCIA:-}
+      # Stripe / billing
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PRICE_ESSENCIAL: ${STRIPE_PRICE_ESSENCIAL}
+      STRIPE_PRICE_PROFISSIONAL: ${STRIPE_PRICE_PROFISSIONAL}
+      STRIPE_PRICE_ESCALA: ${STRIPE_PRICE_ESCALA}
+      # Cota de mensagens por plano (false = sem limite, emergência)
+      COTA_MENSAGENS_ATIVA: ${COTA_MENSAGENS_ATIVA:-true}
+      BILLING_SUCCESS_URL: ${BILLING_SUCCESS_URL}
+      BILLING_CANCEL_URL: ${BILLING_CANCEL_URL}
+      PANEL_URL: ${PANEL_URL}
+      # Suporte / e-mail (SMTP)
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SSL: ${SMTP_SSL}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME}
+      SMTP_REPLY_TO: ${SMTP_REPLY_TO}
+    networks:
+      app_network:
+        # n8n/Evolution/admin chamam o agente por este nome — NÃO remover.
+        aliases:
+          - paratec-agent
+    volumes:
+      - paratec_agent_media:/app/media
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        order: start-first
+
+  # Painel + landing (Next.js). ÚNICO serviço público (via Traefik).
+  admin:
+    image: ${ADMIN_IMAGE:-paratec/admin:674f359}
+    environment:
+      AGENT_INTERNAL_URL: http://paratec-agent:8000
+      NODE_ENV: production
+      # CSP: o painel publica a política em Report-Only por padrão (não bloqueia,
+      # só reporta violações no console). Depois de validar que não há violação
+      # real no painel, defina CSP_ENFORCE=true para passar a bloquear.
+      CSP_ENFORCE: ${CSP_ENFORCE:-false}
+    networks:
+      - app_network
+      - traefik_public
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        order: start-first
+      # No Swarm o provider do Traefik lê os labels do SERVIÇO -> deploy.labels.
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik_public"
+        # Hosts atendidos. Para incluir www/app (SÓ depois de o DNS deles resolver —
+        # senão o ACME/le falha ao emitir o certificado), defina a variável no deploy:
+        #   ADMIN_ROUTER_RULE='Host(`atentbot.com`) || Host(`www.atentbot.com`) || Host(`app.atentbot.com`)'
+        - "traefik.http.routers.atentbot.rule=${ADMIN_ROUTER_RULE:-Host(`atentbot.com`) || Host(`paratec.atentbot.com`)}"
+        - "traefik.http.routers.atentbot.entrypoints=websecure"
+        - "traefik.http.routers.atentbot.tls=true"
+        - "traefik.http.routers.atentbot.tls.certresolver=le"
+        - "traefik.http.services.atentbot.loadbalancer.server.port=3000"
+        # --- Guardrails de borda ---------------------------------------------
+        # Rate-limit por IP de origem (proteção anti-flood/DDoS de camada 7). O
+        # entrypoint NÃO confia em forwardedHeaders (ver topo), então o IP é o
+        # real. average = req/s sustentado; burst = pico tolerado. Ajuste se o
+        # painel (vários XHR) esbarrar.
+        - "traefik.http.middlewares.atentbot-rl.ratelimit.average=${RL_AVERAGE:-50}"
+        - "traefik.http.middlewares.atentbot-rl.ratelimit.burst=${RL_BURST:-100}"
+        # Cabeçalhos de segurança (clickjacking, MIME-sniffing, HSTS, referrer).
+        # CSP fica de fora de propósito: precisa ser afinada com o Next antes de
+        # ligar (uma CSP errada quebra o painel). HSTS sem includeSubdomains/preload
+        # para não afetar subdomínios http — reveja antes de endurecer.
+        - "traefik.http.middlewares.atentbot-sec.headers.frameDeny=true"
+        - "traefik.http.middlewares.atentbot-sec.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.atentbot-sec.headers.referrerPolicy=strict-origin-when-cross-origin"
+        - "traefik.http.middlewares.atentbot-sec.headers.stsSeconds=31536000"
+        - "traefik.http.routers.atentbot.middlewares=atentbot-rl@docker,atentbot-sec@docker"

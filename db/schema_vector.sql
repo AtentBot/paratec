@@ -7,19 +7,23 @@
 --
 -- Executar: psql "$DATABASE_URL" -f db/schema_vector.sql
 
+-- NOTA: o schema real é criado em runtime por app/rag.py (ensure_schema) — este
+-- arquivo é a referência/documentação e deve espelhá-lo. Base ISOLADA POR TENANT.
+
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Cada chunk aponta para o produto de origem.
--- Dimensao 1536 = compativel com varios modelos de embedding; ajuste se preciso.
+-- Cada chunk pertence a um TENANT (isolamento). Dimensão 3072 = gemini-embedding-001.
+-- Banco vetorial é separado do operacional, então tenant_id NÃO tem FK aqui.
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
-    id          SERIAL PRIMARY KEY,
-    product_id  INTEGER REFERENCES products(id) ON DELETE CASCADE,
+    id          BIGSERIAL PRIMARY KEY,
+    tenant_id   BIGINT,
+    source      TEXT NOT NULL,          -- 'catalogo' ou nome do documento enviado
+    titulo      TEXT,
     content     TEXT NOT NULL,
-    embedding   vector(1536),
-    metadata    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    embedding   vector(3072),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_knowledge_embedding
-    ON knowledge_chunks USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+-- 3072 dims excede o limite do ivfflat/hnsw (2000): sem índice ANN; a busca é
+-- exata por tenant (bases pequenas). Índice por tenant acelera o filtro.
+CREATE INDEX IF NOT EXISTS idx_kc_tenant ON knowledge_chunks(tenant_id);

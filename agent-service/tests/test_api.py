@@ -1,5 +1,6 @@
 """Wiring HTTP dos endpoints da tela adm. Sem DB: monkeypatcha a camada
-`store`, validando apenas roteamento, parâmetros e serialização."""
+`store`, validando roteamento, isolamento por tenant (1º arg) e serialização.
+A autenticação é injetada pelo fixture autouse `_auth_override` (tenant_id=1)."""
 import base64
 
 from fastapi.testclient import TestClient
@@ -15,19 +16,18 @@ _PNG = base64.b64decode(
 )
 
 
-def test_fila_repassa_filtros(monkeypatch):
+def test_fila_repassa_filtros_e_tenant(monkeypatch):
     capturado = {}
 
-    def fake_list_queue(tipo=None, status=None):
-        capturado["tipo"] = tipo
-        capturado["status"] = status
+    def fake_list_queue(tenant_id, tipo=None, status=None):
+        capturado.update(tenant_id=tenant_id, tipo=tipo, status=status)
         return [{"id": 1, "tipo": "pedido", "resumo": "x", "status": "novo"}]
 
     monkeypatch.setattr(store, "list_queue", fake_list_queue)
     r = client.get("/fila?tipo=pedido&status=novo")
     assert r.status_code == 200
     assert r.json()[0]["id"] == 1
-    assert capturado == {"tipo": "pedido", "status": "novo"}
+    assert capturado == {"tenant_id": 1, "tipo": "pedido", "status": "novo"}
 
 
 def test_patch_fila_404(monkeypatch):
@@ -37,23 +37,25 @@ def test_patch_fila_404(monkeypatch):
 
 
 def test_conversa_404(monkeypatch):
-    monkeypatch.setattr(store, "get_conversation", lambda tid: None)
+    monkeypatch.setattr(store, "get_conversation", lambda tid, thread: None)
     r = client.get("/conversas/inexistente")
     assert r.status_code == 404
 
 
-def test_metrics_overview(monkeypatch):
+def test_metrics_overview_passa_tenant(monkeypatch):
     payload = {"semana": [], "especialistas": [], "totais": {"na_fila": 0}}
-    monkeypatch.setattr(store, "metrics_overview", lambda: payload)
+    visto = {}
+    monkeypatch.setattr(store, "metrics_overview",
+                        lambda tenant_id: visto.update(t=tenant_id) or payload)
     r = client.get("/metrics/overview")
     assert r.status_code == 200
-    assert r.json() == payload
+    assert r.json() == payload and visto["t"] == 1
 
 
 def test_assumir_conversa(monkeypatch):
     monkeypatch.setattr(
         store, "assumir_conversation",
-        lambda tid: {"thread_id": tid, "status": "humano", "mensagens": []},
+        lambda tid, thread: {"thread_id": thread, "status": "humano", "mensagens": []},
     )
     r = client.post("/conversas/5511/assumir")
     assert r.status_code == 200
@@ -62,19 +64,22 @@ def test_assumir_conversa(monkeypatch):
 
 def test_responder_envia_e_persiste(monkeypatch):
     enviados = {}
-    monkeypatch.setattr(store, "get_conversation", lambda tid: {"thread_id": tid, "mensagens": []})
+    monkeypatch.setattr(store, "get_conversation",
+                        lambda tid, thread: {"thread_id": thread, "instancia": None, "mensagens": []})
     monkeypatch.setattr(store, "add_message", lambda *a, **k: enviados.setdefault("msg", a))
     monkeypatch.setattr(store, "set_status", lambda *a, **k: None)
-    monkeypatch.setattr(evolution, "enviar_texto", lambda tel, txt: enviados.update(tel=tel, txt=txt) or {})
+    monkeypatch.setattr(evolution, "enviar_texto",
+                        lambda tel, txt, **k: enviados.update(tel=tel, txt=txt) or {})
     r = client.post("/conversas/5511/responder", json={"texto": "Olá!"})
     assert r.status_code == 200
     assert enviados["tel"] == "5511" and enviados["txt"] == "Olá!"
 
 
 def test_responder_503_quando_evolution_off(monkeypatch):
-    monkeypatch.setattr(store, "get_conversation", lambda tid: {"thread_id": tid, "mensagens": []})
+    monkeypatch.setattr(store, "get_conversation",
+                        lambda tid, thread: {"thread_id": thread, "instancia": None, "mensagens": []})
 
-    def boom(tel, txt):
+    def boom(tel, txt, **k):
         raise evolution.EvolutionError("não configurada")
 
     monkeypatch.setattr(evolution, "enviar_texto", boom)
@@ -85,7 +90,7 @@ def test_responder_503_quando_evolution_off(monkeypatch):
 def test_clientes_csv(monkeypatch):
     monkeypatch.setattr(
         store, "list_customers",
-        lambda status=None, limit=100000: [
+        lambda tenant_id, status=None, limit=100000: [
             {"telefone": "5511", "razao_social": "ACME", "cnpj": "1", "email": "a@a",
              "nome_contato": "Ana", "status": "ativo", "created_at": "2026-08-29"},
         ],
@@ -104,7 +109,6 @@ def test_broadcast_upload_salva_e_serve_imagem():
     assert up.status_code == 200
     body = up.json()
     assert body["url"].startswith("/media/") and body["arquivo"].endswith(".png")
-    # o arquivo é servido de volta idêntico pelo mount estático /media
     got = client.get(body["url"])
     assert got.status_code == 200 and got.content == _PNG
 
@@ -138,12 +142,12 @@ def test_broadcast_manual_com_banner_envia_midia(monkeypatch):
     capturado = {}
     monkeypatch.setattr(
         store, "customers_por_telefones",
-        lambda tels: [{"telefone": "5511", "razao_social": "ACME", "nome_contato": "Ana"}],
+        lambda tenant_id, tels: [{"telefone": "5511", "razao_social": "ACME", "nome_contato": "Ana"}],
     )
     monkeypatch.setattr(
         store, "create_broadcast",
-        lambda texto, total, criado_por=None, imagem=None: capturado.update(
-            texto=texto, total=total, imagem=imagem
+        lambda tenant_id, texto, total, criado_por=None, imagem=None: capturado.update(
+            tenant_id=tenant_id, texto=texto, total=total, imagem=imagem
         ) or 7,
     )
     monkeypatch.setattr(store, "bump_broadcast", lambda *a, **k: None)
@@ -154,17 +158,13 @@ def test_broadcast_manual_com_banner_envia_midia(monkeypatch):
         evolution, "enviar_midia",
         lambda tel, b64, **kw: envios.append((tel, kw.get("caption"), b64)) or {},
     )
-    # garante que NÃO caiu no caminho de texto puro
-    monkeypatch.setattr(evolution, "enviar_texto", lambda *a, **k: (_ for _ in ()).throw(AssertionError("deveria enviar mídia")))
+    monkeypatch.setattr(evolution, "enviar_texto",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("deveria enviar mídia")))
 
-    r = client.post(
-        "/broadcast",
-        json={"texto": "Promo", "imagem": url, "telefones": ["5511"]},
-    )
+    r = client.post("/broadcast", json={"texto": "Promo", "imagem": url, "telefones": ["5511"]})
     assert r.status_code == 200
     assert r.json()["total"] == 1
-    # imagem gravada na campanha e mídia enviada com legenda == texto
-    assert capturado["imagem"] == url and capturado["total"] == 1
+    assert capturado["imagem"] == url and capturado["total"] == 1 and capturado["tenant_id"] == 1
     assert len(envios) == 1
     tel, caption, b64 = envios[0]
     assert tel == "5511" and caption == "Promo"
@@ -176,7 +176,7 @@ def test_broadcast_segmento_sem_imagem_envia_texto(monkeypatch):
     monkeypatch.setattr(settings, "evolution_api_key", "k", raising=False)
     monkeypatch.setattr(
         store, "customers_para_broadcast",
-        lambda seg: [{"telefone": "5522", "razao_social": "X", "nome_contato": "Y"}],
+        lambda tenant_id, seg: [{"telefone": "5522", "razao_social": "X", "nome_contato": "Y"}],
     )
     monkeypatch.setattr(store, "create_broadcast", lambda *a, **k: 8)
     monkeypatch.setattr(store, "bump_broadcast", lambda *a, **k: None)

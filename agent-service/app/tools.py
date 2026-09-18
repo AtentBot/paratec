@@ -12,48 +12,58 @@ def _json(data) -> str:
 
 
 def _telefone(config: RunnableConfig) -> str:
-    """Número do WhatsApp da conversa atual (thread_id), injetado pelo grafo."""
-    return ((config or {}).get("configurable") or {}).get("thread_id", "")
+    """Número do WhatsApp da conversa atual, injetado pelo grafo.
+
+    Prefere `telefone` (número puro); cai para `thread_id` por compatibilidade.
+    O `thread_id` do grafo agora é namespaced por tenant (`tenant:telefone`)
+    para isolar a memória, então NÃO serve mais como número do cliente."""
+    cfg = (config or {}).get("configurable") or {}
+    return cfg.get("telefone") or cfg.get("thread_id", "")
+
+
+def _tenant(config: RunnableConfig) -> int:
+    """tenant_id da conversa atual, injetado pelo grafo (isolamento de dados)."""
+    return int(((config or {}).get("configurable") or {}).get("tenant_id") or 0)
 
 
 @tool
-def buscar_produtos(termo: str) -> str:
-    """Busca produtos no catálogo Paratec por palavra-chave (nome, material,
+def buscar_produtos(termo: str, config: RunnableConfig) -> str:
+    """Busca produtos no catálogo por palavra-chave (nome, material,
     aplicação ou código). Use para perguntas do tipo 'vocês têm captor Franklin?'
     ou 'preciso de conector bimetálico'. Retorna produtos e suas variantes/SKUs."""
-    return _json(catalog.buscar_produtos(termo))
+    return _json(catalog.buscar_produtos(_tenant(config), termo))
 
 
 @tool
-def detalhes_produto(identificador: str) -> str:
+def detalhes_produto(identificador: str, config: RunnableConfig) -> str:
     """Retorna os detalhes completos de UM produto (todas as variantes, materiais,
     dimensões, descrição e categorias). Aceita o slug ou o id do produto,
     normalmente obtido antes via buscar_produtos."""
-    p = catalog.detalhes_produto(identificador)
+    p = catalog.detalhes_produto(_tenant(config), identificador)
     return _json(p) if p else "Produto não encontrado."
 
 
 @tool
-def buscar_por_sku(sku: str) -> str:
+def buscar_por_sku(sku: str, config: RunnableConfig) -> str:
     """Localiza uma variante pelo código SKU (ex: PRT-101, PRT780, SG2).
     Tolera variações de espaço/hífen. Use quando o cliente informar um código."""
-    rows = catalog.buscar_por_sku(sku)
+    rows = catalog.buscar_por_sku(_tenant(config), sku)
     return _json(rows) if rows else f"Nenhuma variante encontrada para o código {sku}."
 
 
 @tool
-def listar_categorias() -> str:
-    """Lista as categorias de produtos da Paratec e quantos produtos há em cada uma.
+def listar_categorias(config: RunnableConfig) -> str:
+    """Lista as categorias de produtos do catálogo e quantos produtos há em cada uma.
     Use para orientar o cliente sobre as famílias disponíveis."""
-    return _json(catalog.listar_categorias())
+    return _json(catalog.listar_categorias(_tenant(config)))
 
 
 @tool
-def produtos_por_categoria(categoria: str) -> str:
+def produtos_por_categoria(categoria: str, config: RunnableConfig) -> str:
     """Lista os produtos de uma categoria (ex: 'Conectores de Uso Geral',
     'Condutor de Alumínio'). Use após listar_categorias ou quando o cliente
     citar uma família de produtos."""
-    rows = catalog.produtos_por_categoria(categoria)
+    rows = catalog.produtos_por_categoria(_tenant(config), categoria)
     return _json(rows) if rows else f"Nenhum produto na categoria '{categoria}'."
 
 
@@ -76,7 +86,7 @@ def verificar_cliente(config: RunnableConfig) -> str:
     Chame SEMPRE no início do atendimento. Retorna se está cadastrado e, se
     não, quais campos faltam para o cadastro."""
     tel = _telefone(config)
-    c = store.get_customer(tel)
+    c = store.get_customer(_tenant(config), tel)
     if c and c["status"] == "ativo":
         return _json({
             "cadastrado": True,
@@ -118,7 +128,7 @@ def cadastrar_cliente(
             return _json({"ok": False, "erro": "CNPJ inválido", "campo": "cnpj"})
         campos["cnpj"] = validators.cnpj_formatado(cnpj)
 
-    c = store.upsert_customer(tel, **campos)
+    c = store.upsert_customer(_tenant(config), tel, **campos)
     faltam = [k for k in store.CAMPOS_CADASTRO if not c.get(k)]
     return _json({
         "ok": True,
@@ -135,13 +145,14 @@ CADASTRO_TOOLS = [verificar_cliente, cadastrar_cliente]
 # Base de conhecimento (RAG) — busca semântica no catálogo/normas.
 # ---------------------------------------------------------------------------
 @tool
-def buscar_conhecimento(pergunta: str) -> str:
-    """Busca na base de conhecimento da Paratec (catálogo e, futuramente, normas
-    NBR/manuais) trechos relevantes para a dúvida do cliente. Use para perguntas
-    técnicas ou abertas que as buscas diretas de catálogo não cobrem bem."""
+def buscar_conhecimento(pergunta: str, config: RunnableConfig) -> str:
+    """Busca na base de conhecimento do cliente (catálogo e documentos enviados,
+    ex.: normas/manuais) trechos relevantes para a dúvida. Use para perguntas
+    técnicas ou abertas que as buscas diretas de catálogo não cobrem bem.
+    Responde apenas com base no conhecimento DESTE cliente."""
     from . import rag
 
-    chunks = rag.buscar(pergunta, k=4)
+    chunks = rag.buscar(pergunta, _tenant(config), k=4)
     if not chunks:
         return _json({"encontrado": False})
     return _json({
